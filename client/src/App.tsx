@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, Router } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { ExpenseProvider } from "./contexts/ExpenseContext";
@@ -11,7 +11,11 @@ import Categories from "./pages/Categories";
 import Monthly from "./pages/Monthly";
 import Trends from "./pages/Trends";
 
-function Router() {
+// Derive base path from Vite's base config (e.g. "/expense-tracking/")
+// Remove trailing slash for wouter compatibility
+const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "") || "/";
+
+function Routes() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
@@ -30,14 +34,16 @@ function App() {
       <ThemeProvider defaultTheme="light" switchable>
         <TooltipProvider>
           <ExpenseProvider>
-            <Toaster />
-            <Navigation />
-            {/* Main content area with left padding for desktop nav */}
-            <main className="lg:pl-[220px] pb-20 lg:pb-8">
-              <div className="container py-6">
-                <Router />
-              </div>
-            </main>
+            <Router base={base === "/" ? undefined : base}>
+              <Toaster />
+              <Navigation />
+              {/* Main content area with left padding for desktop nav */}
+              <main className="lg:pl-[220px] pb-20 lg:pb-8">
+                <div className="container py-6">
+                  <Routes />
+                </div>
+              </main>
+            </Router>
           </ExpenseProvider>
         </TooltipProvider>
       </ThemeProvider>
