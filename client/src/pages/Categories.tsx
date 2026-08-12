@@ -12,8 +12,9 @@ import StatCard from "@/components/StatCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import { formatCurrency, formatCurrencyExact, formatPercent, formatDate } from "@/lib/utils";
-import { CHART_HEX_COLORS, GROUP_COLORS, MONTH_LABELS } from "@/lib/types";
-import { Tags, Hash, TrendingUp, ArrowUpDown, Search, Layers } from "lucide-react";
+import { CHART_HEX_COLORS } from "@/lib/types";
+import { Tags, Hash, TrendingUp, ArrowUpDown, Search, Layers, Settings2 } from "lucide-react";
+import ManageCategoriesDialog from "@/components/ManageCategoriesDialog";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Cell,
@@ -40,6 +41,7 @@ export default function Categories() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortField, setSortField] = useState<"date" | "amount">("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [manageOpen, setManageOpen] = useState(false);
   const [location] = useLocation();
 
   // Read URL search params for cross-page navigation
@@ -233,9 +235,18 @@ export default function Categories() {
         transition={{ duration: 0.5, delay: 0.1 }}
       >
         <div className="bg-card rounded-xl border border-border p-4">
-          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
-            Select Category or Group
-          </label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider block">
+              Select Category or Group
+            </label>
+            <button
+              onClick={() => setManageOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+              Manage categories
+            </button>
+          </div>
           <select
             value={activeSelection}
             onChange={(e) => {
@@ -554,6 +565,8 @@ export default function Categories() {
           </div>
         </ChartCard>
       </motion.div>
+
+      <ManageCategoriesDialog open={manageOpen} onOpenChange={setManageOpen} />
     </div>
   );
 }

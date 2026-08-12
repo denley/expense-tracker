@@ -13,7 +13,6 @@ import ChartCard from "@/components/ChartCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import { formatCurrency, formatCurrencyExact, formatDate, formatPercent } from "@/lib/utils";
-import { GROUP_COLORS } from "@/lib/types";
 import { TrendingUp, Repeat, Zap, ArrowUpRight, X, ArrowUpDown } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -27,7 +26,7 @@ import type { Transaction } from "@/lib/types";
 const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-trends-2xQXBkMzyXx66hXLnF7Eio.webp";
 
 export default function Trends() {
-  const { transactions, loading, monthlyData, groupData, avgMonthlySpend } = useExpenses();
+  const { transactions, loading, monthlyData, groupData, avgMonthlySpend, groupColors } = useExpenses();
   const [, navigate] = useLocation();
   const [selectedMerchant, setSelectedMerchant] = useState<string | null>(null);
   const [merchantSortField, setMerchantSortField] = useState<"date" | "amount">("date");
@@ -143,7 +142,7 @@ export default function Trends() {
           total: g.total,
           data: monthlyTotals,
           trend,
-          color: GROUP_COLORS[g.name] || "#8e8ea0",
+          color: groupColors[g.name] || "#8e8ea0",
         };
       });
   }, [groupData, monthlyData]);

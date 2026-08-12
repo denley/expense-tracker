@@ -13,7 +13,7 @@ import StatCard from "@/components/StatCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import { formatCurrency, formatCurrencyExact, formatPercent, formatMonthYear } from "@/lib/utils";
-import { CHART_HEX_COLORS, GROUP_COLORS } from "@/lib/types";
+import { CHART_HEX_COLORS } from "@/lib/types";
 import { Calendar, TrendingUp, TrendingDown, BarChart3 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -26,7 +26,7 @@ import { useLocation } from "wouter";
 const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-monthly-6DPs6bdQN45W6sqfwd4qms.webp";
 
 export default function Monthly() {
-  const { transactions, loading, monthlyData, avgMonthlySpend, categoryData } = useExpenses();
+  const { transactions, loading, monthlyData, avgMonthlySpend, categoryData, groupColors } = useExpenses();
   const [selectedMonth, setSelectedMonth] = useState<string>("");
   const [location, navigate] = useLocation();
 
@@ -90,17 +90,28 @@ export default function Monthly() {
     }));
   }, [monthTransactions, activeMonth]);
 
-  // Stacked bar: monthly data with group breakdown
+  // Stacked bar: monthly data with group breakdown (all groups seen in scope)
+  const stackedGroups = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const m of monthlyData) {
+      for (const [g, v] of Object.entries(m.groups)) {
+        totals.set(g, (totals.get(g) || 0) + v);
+      }
+    }
+    return Array.from(totals.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([g]) => g);
+  }, [monthlyData]);
+
   const stackedMonthlyData = useMemo(() => {
-    const groups = Object.keys(GROUP_COLORS);
     return monthlyData.map((m) => {
       const row: Record<string, string | number> = { name: m.label, month: m.month };
-      for (const g of groups) {
+      for (const g of stackedGroups) {
         row[g] = Math.round(m.groups[g] || 0);
       }
       return row;
     });
-  }, [monthlyData]);
+  }, [monthlyData, stackedGroups]);
 
   // Previous month comparison
   const prevMonthData = useMemo(() => {
@@ -237,8 +248,8 @@ export default function Monthly() {
                     iconSize={8}
                     wrapperStyle={{ fontSize: "11px", paddingTop: "8px" }}
                   />
-                  {Object.entries(GROUP_COLORS).map(([group, color]) => (
-                    <Bar key={group} dataKey={group} stackId="a" fill={color} />
+                  {stackedGroups.map((group) => (
+                    <Bar key={group} dataKey={group} stackId="a" fill={groupColors[group]} />
                   ))}
                 </BarChart>
               </ResponsiveContainer>

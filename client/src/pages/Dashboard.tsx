@@ -17,8 +17,8 @@ import ChartCard from "@/components/ChartCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import { formatCurrency, formatCurrencyExact, formatPercent } from "@/lib/utils";
-import { CHART_HEX_COLORS, GROUP_COLORS, MONTH_LABELS } from "@/lib/types";
-import { DollarSign, ShoppingCart, TrendingUp, Receipt } from "lucide-react";
+import { CHART_HEX_COLORS } from "@/lib/types";
+import { DollarSign, ShoppingCart, TrendingUp, Receipt, UploadCloud, FolderKanban } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
@@ -30,7 +30,10 @@ import { useLocation } from "wouter";
 const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-dashboard-athhbv2VmJKH3Q4nBmSvqg.webp";
 
 export default function Dashboard() {
-  const { transactions, loading, totalSpend, monthlyData, categoryData, groupData, avgMonthlySpend } = useExpenses();
+  const {
+    transactions, loading, totalSpend, monthlyData, categoryData, groupData,
+    avgMonthlySpend, yearScope, projects, allTransactions, groupColors,
+  } = useExpenses();
   const [, navigate] = useLocation();
 
   const topCategory = useMemo(() => categoryData[0], [categoryData]);
@@ -45,7 +48,36 @@ export default function Dashboard() {
     [monthlyData]
   );
 
-  const dailyAvg = useMemo(() => totalSpend / 365, [totalSpend]);
+  const dailyAvg = useMemo(() => {
+    if (transactions.length === 0) return 0;
+    const first = transactions[0].date.getTime();
+    const last = transactions[transactions.length - 1].date.getTime();
+    const days = Math.max(1, Math.round((last - first) / 86400000) + 1);
+    return totalSpend / days;
+  }, [totalSpend, transactions]);
+
+  const activeProjects = useMemo(() => {
+    const active = projects.filter((p) => p.status === "active");
+    return active.map((p) => {
+      let total = 0;
+      let count = 0;
+      for (const t of allTransactions) {
+        if (t.group === p.name) {
+          total += t.amount;
+          count++;
+        }
+      }
+      return { ...p, total, count };
+    });
+  }, [projects, allTransactions]);
+
+  // With a single year of data, "all time" is just that year — label it as such
+  const years = useMemo(() => {
+    const set = new Set(transactions.map((t) => t.date.getFullYear()));
+    return Array.from(set);
+  }, [transactions]);
+  const scopeLabel =
+    yearScope !== "all" ? yearScope : years.length === 1 ? String(years[0]) : "All-Time";
 
   const monthlyChartData = useMemo(
     () => monthlyData.map((m) => ({
@@ -62,9 +94,9 @@ export default function Dashboard() {
       .map((g) => ({
         name: g.name,
         value: Math.round(g.total),
-        color: GROUP_COLORS[g.name] || "#8e8ea0",
+        color: groupColors[g.name] || "#8e8ea0",
       })),
-    [groupData]
+    [groupData, groupColors]
   );
 
   const top15Categories = useMemo(
@@ -122,6 +154,32 @@ export default function Dashboard() {
 
   if (loading) return <LoadingState />;
 
+  // Empty state — fresh install with no data
+  if (transactions.length === 0) {
+    return (
+      <div className="space-y-6">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-14 text-center"
+        >
+          <UploadCloud className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
+          <h2 className="text-xl font-bold text-foreground">No transactions yet</h2>
+          <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+            Import a CSV export from your bank to get started. Columns and date formats are
+            detected automatically, and you can save the mapping as a profile for next time.
+          </p>
+          <button
+            onClick={() => navigate("/import")}
+            className="mt-5 px-5 py-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:opacity-90"
+          >
+            Import your first CSV
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Hero Banner */}
@@ -139,14 +197,61 @@ export default function Dashboard() {
         <div className="absolute inset-0 bg-gradient-to-r from-[#2d3436]/80 via-[#2d3436]/50 to-transparent" />
         <div className="relative z-10 h-full flex flex-col justify-center px-6 lg:px-10">
           <h2 className="text-2xl lg:text-3xl font-bold text-white tracking-tight">
-            2025 Spending Overview
+            {scopeLabel} Spending Overview
           </h2>
           <p className="text-white/70 text-sm mt-2 max-w-md">
             {transactions.length} transactions across {categoryData.length} categories,
-            totalling {formatCurrency(totalSpend)} for the year.
+            totalling {formatCurrency(totalSpend)}.
           </p>
         </div>
       </motion.div>
+
+      {/* Active projects snapshot */}
+      {activeProjects.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.05 }}
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+        >
+          {activeProjects.slice(0, 4).map((p) => {
+            const over = p.budget ? p.total > p.budget : false;
+            return (
+              <div
+                key={p.id}
+                onClick={() => navigate(`/projects?project=${p.id}`)}
+                className="bg-card rounded-xl border border-border p-4 cursor-pointer hover:border-primary/30 hover:shadow-sm transition-all"
+              >
+                <div className="flex items-center gap-2 mb-1.5 min-w-0">
+                  <FolderKanban className="w-3.5 h-3.5 shrink-0" style={{ color: p.color }} />
+                  <span className="text-xs font-semibold truncate">{p.name}</span>
+                </div>
+                <div className="text-lg font-semibold tabular-nums">{formatCurrency(p.total)}</div>
+                {p.budget ? (
+                  <div className="mt-2">
+                    <div className="w-full bg-secondary rounded-full h-1.5">
+                      <div
+                        className="h-1.5 rounded-full"
+                        style={{
+                          width: `${Math.min((p.total / p.budget) * 100, 100)}%`,
+                          backgroundColor: over ? "#c0392b" : p.color,
+                        }}
+                      />
+                    </div>
+                    <p className={`text-[10px] mt-1 ${over ? "text-destructive font-medium" : "text-muted-foreground"}`}>
+                      {over
+                        ? `${formatCurrency(p.total - p.budget)} over budget`
+                        : `${formatCurrency(p.budget - p.total)} of ${formatCurrency(p.budget)} left`}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground mt-1">{p.count} transactions</p>
+                )}
+              </div>
+            );
+          })}
+        </motion.div>
+      )}
 
       {/* KPI Cards */}
       <motion.div
@@ -158,7 +263,7 @@ export default function Dashboard() {
         <StatCard
           label="Total Spend"
           value={formatCurrency(totalSpend)}
-          subtitle="Full year 2025"
+          subtitle={yearScope === "all" ? "All time" : `Year ${yearScope}`}
           icon={<DollarSign className="w-4 h-4" />}
         />
         <StatCard
