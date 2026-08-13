@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   FolderKanban, Plus, PencilLine, Archive, ArchiveRestore, Trash2,
-  Wallet, Hash, TrendingUp, CalendarRange, ArrowRight,
+  Wallet, Hash, TrendingUp, CalendarRange, ArrowRight, Check, X, Merge,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils";
 export default function Projects() {
   const {
     loading, allTransactions, projects, categoryDefs, allGroups, categoryGroups,
-    addProject, updateProject, deleteProject, addCategory,
+    addProject, updateProject, deleteProject, addCategory, renameCategory, deleteCategory,
   } = useExpenses();
   const [, navigate] = useLocation();
   const [location] = useLocation();
@@ -56,8 +56,32 @@ export default function Projects() {
   const [notes, setNotes] = useState("");
   const [starterCats, setStarterCats] = useState("");
 
-  // Inline "add category" on the project detail card
+  // Inline category management on the project detail card
   const [newCat, setNewCat] = useState("");
+  const [renamingCat, setRenamingCat] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [mergeCats, setMergeCats] = useState<{ from: string; to: string } | null>(null);
+  const [deletingCat, setDeletingCat] = useState<string | null>(null);
+
+  const txnCountFor = (category: string) =>
+    allTransactions.filter((t) => t.category === category).length;
+
+  const commitCatRename = () => {
+    if (!renamingCat) return;
+    const to = renameValue.trim();
+    if (!to || to === renamingCat) {
+      setRenamingCat(null);
+      return;
+    }
+    if (categoryGroups.has(to)) {
+      // Renaming into an existing category merges the two — confirm first
+      setMergeCats({ from: renamingCat, to });
+    } else {
+      const n = renameCategory(renamingCat, to);
+      toast.success(`Renamed "${renamingCat}" to "${to}" (${n} transactions)`);
+    }
+    setRenamingCat(null);
+  };
 
   const addCategoryToProject = (project: Project) => {
     const cat = newCat.trim();
@@ -290,7 +314,7 @@ export default function Projects() {
             return (
               <div
                 key={p.id}
-                onClick={() => { setSelectedId(isSelected ? null : p.id); setNewCat(""); }}
+                onClick={() => { setSelectedId(isSelected ? null : p.id); setNewCat(""); setRenamingCat(null); }}
                 className={cn(
                   "bg-card rounded-xl border p-5 cursor-pointer transition-all",
                   isSelected ? "border-primary/50 shadow-md" : "border-border hover:border-primary/30 hover:shadow-sm",
@@ -436,17 +460,57 @@ export default function Projects() {
               Categories in this project
             </p>
             <div className="flex flex-wrap items-center gap-1.5">
-              {selectedCategoryDefs.map((d) => (
-                <button
-                  key={d.name}
-                  onClick={() => navigate(`/transactions?category=${encodeURIComponent(d.name)}`)}
-                  className="px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors hover:bg-accent"
-                  style={{ borderColor: `${selected.color}60`, color: selected.color }}
-                  title="View these transactions"
-                >
-                  {d.name}
-                </button>
-              ))}
+              {selectedCategoryDefs.map((d) =>
+                renamingCat === d.name ? (
+                  <span key={d.name} className="inline-flex items-center gap-1">
+                    <input
+                      autoFocus
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitCatRename();
+                        if (e.key === "Escape") setRenamingCat(null);
+                      }}
+                      className="w-[150px] px-2.5 py-1 text-[11px] bg-background border border-border rounded-full focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <button onClick={commitCatRename} className="p-1 rounded-full text-eucalyptus hover:bg-accent" title="Save">
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={() => setRenamingCat(null)} className="p-1 rounded-full text-muted-foreground hover:bg-accent" title="Cancel">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </span>
+                ) : (
+                  <span
+                    key={d.name}
+                    className="inline-flex items-center rounded-full border transition-colors"
+                    style={{ borderColor: `${selected.color}60` }}
+                  >
+                    <button
+                      onClick={() => navigate(`/transactions?category=${encodeURIComponent(d.name)}`)}
+                      className="pl-2.5 pr-1 py-1 text-[11px] font-medium hover:underline"
+                      style={{ color: selected.color }}
+                      title="View these transactions"
+                    >
+                      {d.name}
+                    </button>
+                    <button
+                      onClick={() => { setRenamingCat(d.name); setRenameValue(d.name); }}
+                      className="p-1 text-muted-foreground/60 hover:text-foreground"
+                      title="Rename category"
+                    >
+                      <PencilLine className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => setDeletingCat(d.name)}
+                      className="p-1 pr-1.5 text-muted-foreground/60 hover:text-destructive"
+                      title="Delete category"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </span>
+                )
+              )}
               {selectedCategoryDefs.length === 0 && (
                 <p className="text-xs text-muted-foreground italic">
                   None yet — add the first one:
@@ -672,6 +736,68 @@ export default function Projects() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Category merge confirmation (rename into an existing name) */}
+      <AlertDialog open={!!mergeCats} onOpenChange={(o) => !o && setMergeCats(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Merge className="w-4 h-4" />
+              Merge "{mergeCats?.from}" into "{mergeCats?.to}"?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              "{mergeCats?.to}" already exists
+              {mergeCats && ` (in ${categoryGroups.get(mergeCats.to) ?? "another group"})`}. All{" "}
+              {mergeCats ? txnCountFor(mergeCats.from) : 0} transactions in "{mergeCats?.from}"
+              will move there, and "{mergeCats?.from}" disappears. This can't be split apart
+              automatically afterwards.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (mergeCats) {
+                  const n = renameCategory(mergeCats.from, mergeCats.to);
+                  toast.success(`Merged ${n} transactions into "${mergeCats.to}"`);
+                  setMergeCats(null);
+                }
+              }}
+            >
+              Merge
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Category delete confirmation */}
+      <AlertDialog open={!!deletingCat} onOpenChange={(o) => !o && setDeletingCat(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete category "{deletingCat}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deletingCat ? txnCountFor(deletingCat) : 0} transactions will be marked
+              Uncategorized (leaving this project), and rules assigning this category will be
+              removed. The transactions themselves are kept.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deletingCat) {
+                  const n = deleteCategory(deletingCat);
+                  toast.success(`Deleted "${deletingCat}" — ${n} transactions uncategorised`);
+                  setDeletingCat(null);
+                }
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete category
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete confirmation */}
       <AlertDialog open={!!deleting} onOpenChange={(open) => !open && setDeleting(null)}>
