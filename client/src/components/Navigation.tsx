@@ -44,7 +44,7 @@ const allItems = navSections.flatMap((s) => s.items);
 export default function Navigation() {
   const [location] = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const { yearScope, workspaceName } = useExpenses();
+  const { scopeLabel, workspaceName } = useExpenses();
 
   return (
     <>
@@ -54,8 +54,8 @@ export default function Navigation() {
           <h1 className="text-lg font-bold tracking-tight text-foreground leading-tight">
             Expense<br />Tracker
           </h1>
-          <p className="text-xs text-muted-foreground mt-1 font-medium">
-            {yearScope === "all" ? "All time" : yearScope}
+          <p className="text-xs text-muted-foreground mt-1 font-medium truncate">
+            {scopeLabel}
             {workspaceName && <span className="text-muted-foreground/60"> · {workspaceName}</span>}
           </p>
         </div>

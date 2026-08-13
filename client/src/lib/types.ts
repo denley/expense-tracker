@@ -92,7 +92,7 @@ export type DateFormat = "DMY" | "MDY" | "YMD";
 export type AmountConvention = "negativeIsExpense" | "positiveIsExpense" | "debitCredit";
 
 export interface Settings {
-  yearScope: string; // "all" or "2025"
+  yearScope: string; // "all", "2025", or "range:2024-06-01:2025-08-13" (see lib/scope)
 }
 
 export interface MonthlyData {

@@ -18,20 +18,29 @@ export function ruleMatches(rule: Rule, description: string): boolean {
   return description.toLowerCase().includes(rule.pattern.toLowerCase());
 }
 
+/** One transaction re-categorised by a rule run — enough detail to review and undo it */
+export interface RuleChange {
+  id: string;
+  from: string;
+  to: string;
+  pattern: string;
+}
+
 /**
  * Apply rules to transactions. By default only fills in uncategorized
  * transactions; pass overwrite=true to re-categorize everything that matches.
  * `groupOf` resolves a category to its group in the tree.
- * Returns the modified copies (originals untouched).
+ * Returns the modified copies (originals untouched) plus a change log.
  */
 export function applyRules(
   transactions: StoredTransaction[],
   rules: Rule[],
   groupOf: (category: string) => string,
   options: { overwrite?: boolean } = {}
-): { updated: StoredTransaction[]; count: number } {
+): { updated: StoredTransaction[]; count: number; changes: RuleChange[] } {
   const active = rules.filter((r) => r.enabled && r.category);
   const updated: StoredTransaction[] = [];
+  const changes: RuleChange[] = [];
   for (const txn of transactions) {
     const isUncat = !txn.category || txn.category === UNCATEGORIZED;
     if (!options.overwrite && !isUncat) continue;
@@ -42,8 +51,9 @@ export function applyRules(
       category: rule.category,
       group: groupOf(rule.category),
     });
+    changes.push({ id: txn.id, from: txn.category, to: rule.category, pattern: rule.pattern });
   }
-  return { updated, count: updated.length };
+  return { updated, count: updated.length, changes };
 }
 
 /**

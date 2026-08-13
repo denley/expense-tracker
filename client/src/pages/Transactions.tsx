@@ -10,12 +10,16 @@ import type { Transaction } from "@/lib/types";
 import { UNCATEGORIZED } from "@/lib/types";
 import LoadingState from "@/components/LoadingState";
 import TransactionEditDialog from "@/components/TransactionEditDialog";
+import RuleQuickDialog from "@/components/RuleQuickDialog";
+import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
 import { CategoryPicker } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatDate } from "@/lib/utils";
 import { transactionsToCsv, downloadFile } from "@/lib/export";
+import { dedupKey } from "@/lib/csv";
+import { normalizeMerchant, type RuleChange } from "@/lib/rules";
 import {
   Search, ArrowUpDown, Plus, X, Trash2, Download, Filter,
-  CheckSquare, PencilLine, Wand2,
+  CheckSquare, PencilLine, Wand2, Copy,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -32,7 +36,7 @@ const PAGE_SIZE = 100;
 
 export default function Transactions() {
   const {
-    transactions, loading, categories, groups, accounts, groupColors,
+    transactions, allTransactions, loading, categories, groups, accounts, groupColors,
     updateTransactions, deleteTransactions, runRules, rules,
   } = useExpenses();
   const [location] = useLocation();
@@ -45,6 +49,7 @@ export default function Transactions() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [uncatOnly, setUncatOnly] = useState(false);
+  const [dupOnly, setDupOnly] = useState(false);
 
   // Sort / paging / selection
   const [sortField, setSortField] = useState<SortField>("date");
@@ -61,6 +66,12 @@ export default function Transactions() {
   const [editTxn, setEditTxn] = useState<Transaction | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
+  // Rule-from-transaction dialog
+  const [ruleSeed, setRuleSeed] = useState<{ pattern: string; category: string } | null>(null);
+
+  // Post-"Apply Rules" review
+  const [ruleRunChanges, setRuleRunChanges] = useState<RuleChange[] | null>(null);
+
   // URL params → filters
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -68,7 +79,23 @@ export default function Transactions() {
     if (params.get("group")) setGroup(params.get("group")!);
     if (params.get("q")) setSearch(params.get("q")!);
     if (params.get("uncategorized")) setUncatOnly(true);
+    if (params.get("duplicates")) setDupOnly(true);
   }, [location]);
+
+  // Transactions sharing a date + amount + description with at least one other
+  const duplicateIds = useMemo(() => {
+    const byKey = new Map<string, string[]>();
+    for (const t of allTransactions) {
+      const key = dedupKey({ date: t.dateStr, amount: t.amount, description: t.description });
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(t.id);
+    }
+    const ids = new Set<string>();
+    for (const group of byKey.values()) {
+      if (group.length > 1) group.forEach((id) => ids.add(id));
+    }
+    return ids;
+  }, [allTransactions]);
 
   const filtered = useMemo(() => {
     let list = transactions;
@@ -87,6 +114,7 @@ export default function Transactions() {
     if (dateFrom) list = list.filter((t) => t.dateStr >= dateFrom);
     if (dateTo) list = list.filter((t) => t.dateStr <= dateTo);
     if (uncatOnly) list = list.filter((t) => t.category === UNCATEGORIZED);
+    if (dupOnly) list = list.filter((t) => duplicateIds.has(t.id));
 
     return [...list].sort((a, b) => {
       let cmp = 0;
@@ -98,7 +126,7 @@ export default function Transactions() {
       }
       return sortDir === "desc" ? -cmp : cmp;
     });
-  }, [transactions, search, category, group, account, dateFrom, dateTo, uncatOnly, sortField, sortDir]);
+  }, [transactions, search, category, group, account, dateFrom, dateTo, uncatOnly, dupOnly, duplicateIds, sortField, sortDir]);
 
   const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount]);
   const filteredTotal = useMemo(() => filtered.reduce((s, t) => s + t.amount, 0), [filtered]);
@@ -106,12 +134,16 @@ export default function Transactions() {
     () => transactions.filter((t) => t.category === UNCATEGORIZED).length,
     [transactions]
   );
+  const dupCount = useMemo(
+    () => transactions.filter((t) => duplicateIds.has(t.id)).length,
+    [transactions, duplicateIds]
+  );
 
-  const hasFilters = !!(search || category || group || account || dateFrom || dateTo || uncatOnly);
+  const hasFilters = !!(search || category || group || account || dateFrom || dateTo || uncatOnly || dupOnly);
 
   const clearFilters = () => {
     setSearch(""); setCategory(""); setGroup(""); setAccount("");
-    setDateFrom(""); setDateTo(""); setUncatOnly(false);
+    setDateFrom(""); setDateTo(""); setUncatOnly(false); setDupOnly(false);
     setVisibleCount(PAGE_SIZE);
   };
 
@@ -182,12 +214,12 @@ export default function Transactions() {
   };
 
   const applyRulesNow = () => {
-    const count = runRules({});
-    toast.success(
-      count > 0
-        ? `Categorised ${count} transaction${count === 1 ? "" : "s"} using your rules`
-        : "No uncategorised transactions matched your rules"
-    );
+    const { count, changes } = runRules({});
+    if (count > 0) {
+      setRuleRunChanges(changes);
+    } else {
+      toast.info("No uncategorised transactions matched your rules");
+    }
   };
 
   if (loading) return <LoadingState />;
@@ -214,6 +246,15 @@ export default function Transactions() {
                 className="ml-2 text-terracotta hover:underline font-medium"
               >
                 {uncatCount} uncategorised →
+              </button>
+            )}
+            {dupCount > 0 && (
+              <button
+                onClick={() => { clearFilters(); setDupOnly(true); }}
+                className="ml-2 text-sandstone hover:underline font-medium"
+                title="Transactions with the same date, amount and description as another"
+              >
+                {dupCount} possible duplicates →
               </button>
             )}
           </p>
@@ -296,6 +337,18 @@ export default function Transactions() {
           >
             Uncategorised only
           </button>
+          <button
+            onClick={() => setDupOnly(!dupOnly)}
+            className={cn(
+              "px-2.5 py-1.5 rounded-full text-[11px] font-medium border transition-colors",
+              dupOnly
+                ? "bg-sandstone/10 border-sandstone/40 text-sandstone"
+                : "border-border text-muted-foreground hover:bg-accent"
+            )}
+            title="Transactions with the same date, amount and description as another"
+          >
+            Possible duplicates
+          </button>
           {hasFilters && (
             <button
               onClick={clearFilters}
@@ -377,7 +430,17 @@ export default function Transactions() {
                     {formatDate(t.date)}
                   </td>
                   <td className="px-3 py-2 text-xs text-foreground max-w-[280px]">
-                    <div className="truncate font-medium">{t.notes || t.description}</div>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="truncate font-medium">{t.notes || t.description}</span>
+                      {duplicateIds.has(t.id) && (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sandstone/15 text-sandstone text-[9px] font-semibold uppercase tracking-wide shrink-0"
+                          title="Same date, amount and description as another transaction"
+                        >
+                          <Copy className="w-2.5 h-2.5" /> dup
+                        </span>
+                      )}
+                    </div>
                     {t.notes && (
                       <div className="truncate text-[10px] text-muted-foreground">{t.description}</div>
                     )}
@@ -411,13 +474,27 @@ export default function Transactions() {
                     {formatCurrencyExact(t.amount)}
                   </td>
                   <td className="px-2 py-2">
-                    <button
-                      onClick={() => { setEditTxn(t); setDialogOpen(true); }}
-                      className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                      title="Edit"
-                    >
-                      <PencilLine className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center">
+                      <button
+                        onClick={() =>
+                          setRuleSeed({
+                            pattern: normalizeMerchant(t.description),
+                            category: t.category === UNCATEGORIZED ? "" : t.category,
+                          })
+                        }
+                        className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-accent transition-colors"
+                        title="Create rule from this transaction"
+                      >
+                        <Wand2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => { setEditTxn(t); setDialogOpen(true); }}
+                        className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                        title="Edit"
+                      >
+                        <PencilLine className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -520,6 +597,19 @@ export default function Transactions() {
       </AlertDialog>
 
       <TransactionEditDialog open={dialogOpen} onOpenChange={setDialogOpen} transaction={editTxn} />
+
+      <RuleQuickDialog
+        open={ruleSeed !== null}
+        onOpenChange={(o) => !o && setRuleSeed(null)}
+        seedPattern={ruleSeed?.pattern ?? ""}
+        seedCategory={ruleSeed?.category ?? ""}
+      />
+
+      <RuleRunReviewDialog
+        open={ruleRunChanges !== null}
+        onOpenChange={(o) => !o && setRuleRunChanges(null)}
+        changes={ruleRunChanges ?? []}
+      />
     </div>
   );
 }

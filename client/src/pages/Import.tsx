@@ -56,10 +56,17 @@ export default function Import() {
   const [profileName, setProfileName] = useState("");
   const [dragOver, setDragOver] = useState(false);
 
-  const existingKeys = useMemo(
-    () => new Set(storedTransactions.map(dedupKey)),
-    [storedTransactions]
-  );
+  // First existing transaction per dedup key — lets duplicate rows show what they matched
+  const existingByKey = useMemo(() => {
+    const map = new Map<string, (typeof storedTransactions)[number]>();
+    for (const t of storedTransactions) {
+      const key = dedupKey(t);
+      if (!map.has(key)) map.set(key, t);
+    }
+    return map;
+  }, [storedTransactions]);
+
+  const existingKeys = useMemo(() => new Set(existingByKey.keys()), [existingByKey]);
 
   const applyProfile = (p: ImportProfile) => {
     setMapping(p.mapping);
@@ -115,16 +122,20 @@ export default function Import() {
     return buildCandidates(parsed.rows, mapping, dateFormat, convention, account, existingKeys);
   }, [parsed, mapping, dateFormat, convention, account, existingKeys]);
 
-  // Whole-import category + rule-based categorisation preview
-  const categorised = useMemo(() => {
+  // Whole-import category + rule-based categorisation preview.
+  // rulePatternById records which rule categorised each row, for the preview.
+  const { categorised, rulePatternById } = useMemo(() => {
     let txns = candidates.map((c) => c.txn);
     if (importCategory) {
       txns = txns.map((t) => ({ ...t, category: importCategory, group: groupOf(importCategory) }));
     }
-    if (!useRules || rules.length === 0) return txns;
-    const { updated } = applyRules(txns, rules, groupOf, {});
+    if (!useRules || rules.length === 0) return { categorised: txns, rulePatternById: new Map<string, string>() };
+    const { updated, changes } = applyRules(txns, rules, groupOf, {});
     const byId = new Map(updated.map((t) => [t.id, t]));
-    return txns.map((t) => byId.get(t.id) ?? t);
+    return {
+      categorised: txns.map((t) => byId.get(t.id) ?? t),
+      rulePatternById: new Map(changes.map((c) => [c.id, c.pattern])),
+    };
   }, [candidates, importCategory, useRules, rules, groupOf]);
 
   const newCount = candidates.filter((c) => !c.duplicate).length;
@@ -525,25 +536,44 @@ export default function Import() {
                   {categorised.map((t, i) => {
                     const dup = candidates[i].duplicate;
                     const skipped = dup && !includeDuplicates;
+                    const existing = dup ? existingByKey.get(dedupKey(candidates[i].txn)) : undefined;
+                    const rulePattern = rulePatternById.get(t.id);
                     return (
                       <tr
                         key={t.id}
                         className={cn("border-b border-border/50", skipped && "opacity-40")}
                       >
-                        <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-muted-foreground">{t.date}</td>
-                        <td className="px-3 py-1.5 max-w-[280px] truncate">{t.description}</td>
-                        <td className={cn("px-3 py-1.5 whitespace-nowrap", t.category === UNCATEGORIZED ? "text-terracotta" : "")}>
-                          {t.category}
+                        <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-muted-foreground align-top">{t.date}</td>
+                        <td className="px-3 py-1.5 max-w-[280px] align-top">
+                          <div className="truncate">{t.description}</div>
+                          {dup && (
+                            <div className="text-[10px] text-sandstone truncate">
+                              {existing
+                                ? `matches existing: ${existing.date} · ${formatCurrency(existing.amount)} · ${existing.category}${existing.account ? ` · ${existing.account}` : ""}`
+                                : "appears twice in this file"}
+                            </div>
+                          )}
+                        </td>
+                        <td className={cn("px-3 py-1.5 whitespace-nowrap align-top", t.category === UNCATEGORIZED ? "text-terracotta" : "")}>
+                          {rulePattern && (
+                            <Wand2
+                              className="w-3 h-3 inline-block mr-1 text-ocean"
+                              aria-label={`Categorised by rule "${rulePattern}"`}
+                            />
+                          )}
+                          <span title={rulePattern ? `Categorised by rule "${rulePattern}"` : undefined}>
+                            {t.category}
+                          </span>
                           {t.category !== UNCATEGORIZED && (
                             <span className="text-muted-foreground ml-1">({groupOf(t.category)})</span>
                           )}
                         </td>
-                        <td className={cn("px-3 py-1.5 text-right whitespace-nowrap tabular-nums font-medium", t.amount < 0 && "text-eucalyptus")}>
+                        <td className={cn("px-3 py-1.5 text-right whitespace-nowrap tabular-nums font-medium align-top", t.amount < 0 && "text-eucalyptus")}>
                           {formatCurrency(t.amount)}
                         </td>
-                        <td className="px-3 py-1.5 whitespace-nowrap">
+                        <td className="px-3 py-1.5 whitespace-nowrap align-top">
                           {dup ? (
-                            <span className="text-muted-foreground">duplicate</span>
+                            <span className="text-sandstone">duplicate</span>
                           ) : (
                             <span className="text-eucalyptus flex items-center gap-1"><Check className="w-3 h-3" /> new</span>
                           )}

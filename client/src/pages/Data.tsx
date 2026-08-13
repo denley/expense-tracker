@@ -13,7 +13,8 @@ import { CategoryPicker, inputCls } from "@/components/pickers";
 import {
   transactionsToCsv, makeBackup, parseBackup, downloadFile,
 } from "@/lib/export";
-import { suggestRulesFromHistory } from "@/lib/rules";
+import { suggestRulesFromHistory, type RuleChange } from "@/lib/rules";
+import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
 import { UNCATEGORIZED } from "@/lib/types";
 import {
   Download, DatabaseBackup, Wand2, Plus, Trash2, Bot, FolderOpen, RefreshCw,
@@ -42,6 +43,9 @@ export default function Data() {
   // New rule form
   const [rulePattern, setRulePattern] = useState("");
   const [ruleCategory, setRuleCategory] = useState("");
+
+  // Post-run review of what the rules changed
+  const [ruleRunChanges, setRuleRunChanges] = useState<RuleChange[] | null>(null);
 
   const suggestions = useMemo(
     () =>
@@ -246,8 +250,9 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
             <div className="flex gap-2">
               <button
                 onClick={() => {
-                  const n = runRules({});
-                  toast.success(n > 0 ? `Categorised ${n} transactions` : "No uncategorised matches");
+                  const { count, changes } = runRules({});
+                  if (count > 0) setRuleRunChanges(changes);
+                  else toast.info("No uncategorised matches");
                 }}
                 className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border hover:bg-accent"
               >
@@ -401,8 +406,9 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                const n = runRules({ overwrite: true });
-                toast.success(`Re-categorised ${n} transactions`);
+                const { count, changes } = runRules({ overwrite: true });
+                if (count > 0) setRuleRunChanges(changes);
+                else toast.info("No transactions matched a rule with a different category");
                 setConfirmOverwriteRules(false);
               }}
             >
@@ -411,6 +417,12 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <RuleRunReviewDialog
+        open={ruleRunChanges !== null}
+        onOpenChange={(o) => !o && setRuleRunChanges(null)}
+        changes={ruleRunChanges ?? []}
+      />
 
       {/* Switch folder confirmation */}
       <AlertDialog open={confirmDisconnect} onOpenChange={setConfirmDisconnect}>

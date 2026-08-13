@@ -54,7 +54,8 @@ import {
   rulesToCsv,
   type WorkspaceData,
 } from "@/lib/workspace";
-import { applyRules } from "@/lib/rules";
+import { applyRules, type RuleChange } from "@/lib/rules";
+import { parseScope, scopeContains, scopeLabelOf } from "@/lib/scope";
 import { toast } from "sonner";
 
 export type WorkspaceStatus =
@@ -107,10 +108,12 @@ interface ExpenseContextType {
   rules: Rule[];
   importProfiles: ImportProfile[];
 
-  // Scope
+  // Scope ("all", a year like "2025", or "range:from:to" — see lib/scope)
   yearScope: string;
   setYearScope: (scope: string) => void;
   availableYears: string[];
+  /** Human-readable form of the current scope, e.g. "2025" or "1 Jun 2024 – 13 Aug 2025" */
+  scopeLabel: string;
 
   // Derived (scoped)
   totalSpend: number;
@@ -128,6 +131,8 @@ interface ExpenseContextType {
   addTransactions: (txns: StoredTransaction[]) => void;
   updateTransactions: (ids: string[], changes: TransactionChanges) => void;
   deleteTransactions: (ids: string[]) => void;
+  /** Set each transaction's category individually (used to undo a rule run) */
+  revertCategories: (items: Array<{ id: string; category: string }>) => void;
 
   // Category tree management
   addCategory: (name: string, group: string) => void;
@@ -148,7 +153,7 @@ interface ExpenseContextType {
   addRule: (r: Omit<Rule, "id" | "createdAt">) => void;
   updateRule: (id: string, patch: Partial<Rule>) => void;
   deleteRule: (id: string) => void;
-  runRules: (options: { overwrite?: boolean }) => number;
+  runRules: (options: { overwrite?: boolean }) => { count: number; changes: RuleChange[] };
 
   // Import profiles
   saveImportProfile: (p: ImportProfile) => void;
@@ -597,15 +602,21 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   }, [allTransactions]);
 
   const yearScope = settings.yearScope || "all";
+  const parsedScope = parseScope(yearScope);
   const effectiveScope =
-    yearScope !== "all" && !availableYears.includes(yearScope) && availableYears.length > 0
+    parsedScope.kind === "year" &&
+    !availableYears.includes(parsedScope.year) &&
+    availableYears.length > 0
       ? "all"
       : yearScope;
+  const scope = useMemo(() => parseScope(effectiveScope), [effectiveScope]);
 
   const transactions = useMemo(() => {
-    if (effectiveScope === "all") return allTransactions;
-    return allTransactions.filter((t) => String(t.date.getFullYear()) === effectiveScope);
-  }, [allTransactions, effectiveScope]);
+    if (scope.kind === "all") return allTransactions;
+    return allTransactions.filter((t) => scopeContains(scope, t.dateStr));
+  }, [allTransactions, scope]);
+
+  const scopeLabel = useMemo(() => scopeLabelOf(scope), [scope]);
 
   const setYearScope = useCallback(
     (scope: string) => persistSettings({ ...settings, yearScope: scope }),
@@ -613,9 +624,10 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   );
 
   // ---------- Derived analytics (scoped) ----------
+  // Month labels carry the year whenever the scoped data spans more than one
   const multiYear = useMemo(
-    () => effectiveScope === "all" && availableYears.length > 1,
-    [effectiveScope, availableYears]
+    () => new Set(transactions.map((t) => t.date.getFullYear())).size > 1,
+    [transactions]
   );
 
   const totalSpend = useMemo(
@@ -924,14 +936,28 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
 
   const runRules = useCallback(
     (options: { overwrite?: boolean }) => {
-      const { updated, count } = applyRules(stored, rules, groupOf, options);
+      const { updated, count, changes } = applyRules(stored, rules, groupOf, options);
       if (count > 0) {
         const byId = new Map(updated.map((t) => [t.id, t]));
         persistTxns(stored.map((t) => byId.get(t.id) ?? t));
       }
-      return count;
+      return { count, changes };
     },
     [stored, rules, groupOf, persistTxns]
+  );
+
+  const revertCategories = useCallback(
+    (items: Array<{ id: string; category: string }>) => {
+      const byId = new Map(items.map((i) => [i.id, i.category]));
+      persistTxns(
+        stored.map((t) => {
+          const cat = byId.get(t.id);
+          if (cat === undefined || cat === t.category) return t;
+          return { ...t, category: cat, group: groupOf(cat) };
+        })
+      );
+    },
+    [stored, groupOf, persistTxns]
   );
 
   // ---------- Import profiles ----------
@@ -998,6 +1024,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     yearScope: effectiveScope,
     setYearScope,
     availableYears,
+    scopeLabel,
     totalSpend,
     monthlyData,
     categoryData,
@@ -1011,6 +1038,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     addTransactions,
     updateTransactions,
     deleteTransactions,
+    revertCategories,
     addCategory,
     renameCategory,
     setCategoryGroup,

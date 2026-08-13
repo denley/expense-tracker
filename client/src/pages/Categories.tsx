@@ -5,16 +5,19 @@
   - Monthly trend, top merchants, transaction table
   - Reads ?category= or ?group= from URL search params for cross-page navigation
 */
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import ChartCard from "@/components/ChartCard";
 import StatCard from "@/components/StatCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
+import TransactionEditDialog from "@/components/TransactionEditDialog";
+import { CategoryPicker } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatPercent, formatDate } from "@/lib/utils";
-import { CHART_HEX_COLORS } from "@/lib/types";
-import { Tags, Hash, TrendingUp, ArrowUpDown, Search, Layers, Settings2 } from "lucide-react";
+import { CHART_HEX_COLORS, type Transaction } from "@/lib/types";
+import { Tags, Hash, TrendingUp, ArrowUpDown, Search, Layers, Settings2, PencilLine, ExternalLink } from "lucide-react";
 import ManageCategoriesDialog from "@/components/ManageCategoriesDialog";
+import { toast } from "sonner";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Cell,
@@ -36,13 +39,14 @@ function getGroupName(val: string): string {
 }
 
 export default function Categories() {
-  const { transactions, loading, categoryData, totalSpend, monthlyData, groupData } = useExpenses();
+  const { transactions, loading, categoryData, totalSpend, monthlyData, groupData, updateTransactions } = useExpenses();
   const [selection, setSelection] = useState<SelectionType>("");
   const [searchTerm, setSearchTerm] = useState("");
   const [sortField, setSortField] = useState<"date" | "amount">("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [manageOpen, setManageOpen] = useState(false);
-  const [location] = useLocation();
+  const [editTxn, setEditTxn] = useState<Transaction | null>(null);
+  const [location, navigate] = useLocation();
 
   // Read URL search params for cross-page navigation
   useEffect(() => {
@@ -174,24 +178,36 @@ export default function Categories() {
     }));
   }, [monthlyData, isAll, isGroup, activeGroupName, activeCategoryName]);
 
-  // Top merchants for the selection
+  // Top merchants for the selection ("full" keeps the untruncated key for search links)
   const topMerchants = useMemo(() => {
     const map = new Map<string, { total: number; count: number }>();
     for (const t of selectionTransactions) {
       const key = t.notes || t.description;
-      const cleanKey = key.length > 40 ? key.substring(0, 40) + "..." : key;
-      if (!map.has(cleanKey)) {
-        map.set(cleanKey, { total: 0, count: 0 });
+      if (!map.has(key)) {
+        map.set(key, { total: 0, count: 0 });
       }
-      const m = map.get(cleanKey)!;
+      const m = map.get(key)!;
       m.total += t.amount;
       m.count += 1;
     }
     return Array.from(map.entries())
-      .map(([name, data]) => ({ name, ...data }))
+      .map(([full, data]) => ({
+        name: full.length > 40 ? full.substring(0, 40) + "..." : full,
+        full,
+        ...data,
+      }))
       .sort((a, b) => b.total - a.total)
       .slice(0, 8);
   }, [selectionTransactions]);
+
+  // Click a merchant bar → that merchant's transactions, ready to verify or fix
+  const handleMerchantClick = useCallback(
+    (data: any) => {
+      const full = data?.activePayload?.[0]?.payload?.full;
+      if (full) navigate(`/transactions?q=${encodeURIComponent(full)}`);
+    },
+    [navigate]
+  );
 
   const toggleSort = (field: "date" | "amount") => {
     if (sortField === field) {
@@ -239,13 +255,27 @@ export default function Categories() {
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider block">
               Select Category or Group
             </label>
-            <button
-              onClick={() => setManageOpen(true)}
-              className="flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
-            >
-              <Settings2 className="w-3.5 h-3.5" />
-              Manage categories
-            </button>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => {
+                  if (activeCategoryName) navigate(`/transactions?category=${encodeURIComponent(activeCategoryName)}`);
+                  else if (activeGroupName) navigate(`/transactions?group=${encodeURIComponent(activeGroupName)}`);
+                  else navigate("/transactions");
+                }}
+                className="flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+                title="Open this selection in the Transactions list for filtering and bulk edits"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                Open in Transactions
+              </button>
+              <button
+                onClick={() => setManageOpen(true)}
+                className="flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+              >
+                <Settings2 className="w-3.5 h-3.5" />
+                Manage categories
+              </button>
+            </div>
           </div>
           <select
             value={activeSelection}
@@ -346,10 +376,16 @@ export default function Categories() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
         >
-          <ChartCard title="Top Merchants" subtitle="By total spend">
+          <ChartCard title="Top Merchants" subtitle="Click a bar to review those transactions">
             <div className="h-[280px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={topMerchants} layout="vertical" barCategoryGap="15%">
+                <BarChart
+                  data={topMerchants}
+                  layout="vertical"
+                  barCategoryGap="15%"
+                  onClick={handleMerchantClick}
+                  className="cursor-pointer"
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
                   <XAxis
                     type="number"
@@ -503,11 +539,9 @@ export default function Categories() {
                   <th className="text-left px-5 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
                     Description
                   </th>
-                  {(isAll || isGroup) && (
-                    <th className="text-left px-5 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider hidden md:table-cell">
-                      Category
-                    </th>
-                  )}
+                  <th className="text-left px-5 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider hidden md:table-cell">
+                    Category
+                  </th>
                   <th
                     className="text-right px-5 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider cursor-pointer hover:text-foreground"
                     onClick={() => toggleSort("amount")}
@@ -520,12 +554,13 @@ export default function Categories() {
                   <th className="text-left px-5 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider hidden lg:table-cell">
                     Notes
                   </th>
+                  <th className="w-10" />
                 </tr>
               </thead>
               <tbody>
-                {filteredTransactions.slice(0, 50).map((t, i) => (
+                {filteredTransactions.slice(0, 50).map((t) => (
                   <tr
-                    key={i}
+                    key={t.id}
                     className="border-b border-border/50 hover:bg-accent/50 transition-colors"
                   >
                     <td className="px-5 py-2.5 text-xs text-muted-foreground whitespace-nowrap tabular-nums">
@@ -534,24 +569,31 @@ export default function Categories() {
                     <td className="px-5 py-2.5 text-xs text-foreground max-w-[250px] truncate">
                       {t.description}
                     </td>
-                    {(isAll || isGroup) && (
-                      <td className="px-5 py-2.5 text-xs hidden md:table-cell">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelection(t.category);
-                          }}
-                          className="text-primary hover:text-primary/80 hover:underline transition-colors"
-                        >
-                          {t.category}
-                        </button>
-                      </td>
-                    )}
+                    <td className="px-5 py-1.5 text-xs hidden md:table-cell">
+                      <CategoryPicker
+                        value={t.category}
+                        onChange={(cat) => {
+                          if (cat === t.category) return;
+                          updateTransactions([t.id], { category: cat });
+                          toast.success(`Moved to ${cat}`);
+                        }}
+                        className="!text-xs !py-1 !px-2 max-w-[180px]"
+                      />
+                    </td>
                     <td className={`px-5 py-2.5 text-xs font-medium text-right whitespace-nowrap tabular-nums ${t.amount < 0 ? "text-eucalyptus" : "text-foreground"}`}>
                       {formatCurrencyExact(t.amount)}
                     </td>
                     <td className="px-5 py-2.5 text-xs text-muted-foreground max-w-[200px] truncate hidden lg:table-cell">
                       {t.notes}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <button
+                        onClick={() => setEditTxn(t)}
+                        className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                        title="Edit transaction"
+                      >
+                        <PencilLine className="w-3.5 h-3.5" />
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -567,6 +609,11 @@ export default function Categories() {
       </motion.div>
 
       <ManageCategoriesDialog open={manageOpen} onOpenChange={setManageOpen} />
+      <TransactionEditDialog
+        open={editTxn !== null}
+        onOpenChange={(o) => !o && setEditTxn(null)}
+        transaction={editTxn}
+      />
     </div>
   );
 }

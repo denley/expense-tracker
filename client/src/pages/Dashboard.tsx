@@ -32,7 +32,7 @@ const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HS
 export default function Dashboard() {
   const {
     transactions, loading, totalSpend, monthlyData, categoryData, groupData,
-    avgMonthlySpend, yearScope, projects, allTransactions, groupColors,
+    avgMonthlySpend, yearScope, scopeLabel, projects, allTransactions, groupColors,
   } = useExpenses();
   const [, navigate] = useLocation();
 
@@ -76,8 +76,8 @@ export default function Dashboard() {
     const set = new Set(transactions.map((t) => t.date.getFullYear()));
     return Array.from(set);
   }, [transactions]);
-  const scopeLabel =
-    yearScope !== "all" ? yearScope : years.length === 1 ? String(years[0]) : "All-Time";
+  const heroLabel =
+    yearScope === "all" && years.length === 1 ? String(years[0]) : scopeLabel;
 
   const monthlyChartData = useMemo(
     () => monthlyData.map((m) => ({
@@ -154,6 +154,19 @@ export default function Dashboard() {
 
   if (loading) return <LoadingState />;
 
+  // Data exists but the current time scope excludes all of it
+  if (transactions.length === 0 && allTransactions.length > 0) {
+    return (
+      <div className="bg-card border border-border rounded-2xl p-14 text-center">
+        <h2 className="text-xl font-bold text-foreground">Nothing in this time range</h2>
+        <p className="text-sm text-muted-foreground mt-2">
+          No transactions between the selected dates ({scopeLabel}). Adjust the range in the
+          sidebar, or switch back to All time.
+        </p>
+      </div>
+    );
+  }
+
   // Empty state — fresh install with no data
   if (transactions.length === 0) {
     return (
@@ -197,7 +210,7 @@ export default function Dashboard() {
         <div className="absolute inset-0 bg-gradient-to-r from-[#2d3436]/80 via-[#2d3436]/50 to-transparent" />
         <div className="relative z-10 h-full flex flex-col justify-center px-6 lg:px-10">
           <h2 className="text-2xl lg:text-3xl font-bold text-white tracking-tight">
-            {scopeLabel} Spending Overview
+            {heroLabel} Spending Overview
           </h2>
           <p className="text-white/70 text-sm mt-2 max-w-md">
             {transactions.length} transactions across {categoryData.length} categories,
@@ -263,7 +276,7 @@ export default function Dashboard() {
         <StatCard
           label="Total Spend"
           value={formatCurrency(totalSpend)}
-          subtitle={yearScope === "all" ? "All time" : `Year ${yearScope}`}
+          subtitle={scopeLabel}
           icon={<DollarSign className="w-4 h-4" />}
         />
         <StatCard
