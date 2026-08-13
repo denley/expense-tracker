@@ -35,10 +35,12 @@ export function CategoryPicker({
   defaultNewGroup,
   className,
 }: CategoryPickerProps) {
-  const { categoryGroups, allGroups, archivedGroups, addCategory } = useExpenses();
+  const { categoryGroups, allGroups, archivedGroups, addCategory, projects } = useExpenses();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newGroup, setNewGroup] = useState(defaultNewGroup ?? "");
+
+  const projectGroups = useMemo(() => new Set(projects.map((p) => p.name)), [projects]);
 
   const { activeGrouped, archivedGrouped } = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -46,18 +48,29 @@ export function CategoryPicker({
       if (!map.has(group)) map.set(group, []);
       map.get(group)!.push(cat);
     }
+    // Ordinary groups alphabetically, then project groups clustered at the end
     const entries = Array.from(map.entries())
       .map(([group, cats]) => ({ group, cats: cats.sort() }))
-      .sort((a, b) => a.group.localeCompare(b.group));
+      .sort(
+        (a, b) =>
+          Number(projectGroups.has(a.group)) - Number(projectGroups.has(b.group)) ||
+          a.group.localeCompare(b.group)
+      );
     return {
       activeGrouped: entries.filter((e) => !archivedGroups.has(e.group)),
       archivedGrouped: entries.filter((e) => archivedGroups.has(e.group)),
     };
-  }, [categoryGroups, archivedGroups]);
+  }, [categoryGroups, archivedGroups, projectGroups]);
 
   const creatableGroups = useMemo(
-    () => allGroups.filter((g) => !archivedGroups.has(g)),
-    [allGroups, archivedGroups]
+    () =>
+      allGroups
+        .filter((g) => !archivedGroups.has(g))
+        .sort(
+          (a, b) =>
+            Number(projectGroups.has(a)) - Number(projectGroups.has(b)) || a.localeCompare(b)
+        ),
+    [allGroups, archivedGroups, projectGroups]
   );
 
   const commitCreate = () => {
@@ -123,7 +136,7 @@ export function CategoryPicker({
       {allowEmpty && <option value="">{emptyLabel}</option>}
       {value && !categoryGroups.has(value) && <option value={value}>{value}</option>}
       {activeGrouped.map((g) => (
-        <optgroup key={g.group} label={g.group}>
+        <optgroup key={g.group} label={projectGroups.has(g.group) ? `${g.group} (project)` : g.group}>
           {g.cats.map((c) => (
             <option key={c} value={c}>
               {c}
@@ -154,13 +167,22 @@ interface GroupPickerProps {
 }
 
 export function GroupPicker({ value, onChange, allowEmpty, emptyLabel = "— Keep unchanged —", className }: GroupPickerProps) {
-  const { allGroups, archivedGroups } = useExpenses();
+  const { allGroups, archivedGroups, projects } = useExpenses();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
 
+  const projectGroups = useMemo(() => new Set(projects.map((p) => p.name)), [projects]);
+
+  // Ordinary groups first, project groups clustered at the end
   const options = useMemo(
-    () => allGroups.filter((g) => !archivedGroups.has(g) || g === value),
-    [allGroups, archivedGroups, value]
+    () =>
+      allGroups
+        .filter((g) => !archivedGroups.has(g) || g === value)
+        .sort(
+          (a, b) =>
+            Number(projectGroups.has(a)) - Number(projectGroups.has(b)) || a.localeCompare(b)
+        ),
+    [allGroups, archivedGroups, projectGroups, value]
   );
 
   if (creating) {
@@ -210,7 +232,7 @@ export function GroupPicker({ value, onChange, allowEmpty, emptyLabel = "— Kee
       {value && !options.includes(value) && <option value={value}>{value}</option>}
       {options.map((g) => (
         <option key={g} value={g}>
-          {archivedGroups.has(g) ? `${g} (archived)` : g}
+          {archivedGroups.has(g) ? `${g} (archived)` : projectGroups.has(g) ? `${g} (project)` : g}
         </option>
       ))}
       <option value={NEW_SENTINEL}>＋ New group…</option>
