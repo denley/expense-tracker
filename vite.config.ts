@@ -18,7 +18,8 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 3000,
+    // PORT lets the Claude Code browser preview assign a free port
+    port: Number(process.env.PORT) || 3000,
     host: true,
   },
 });

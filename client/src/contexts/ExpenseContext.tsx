@@ -131,6 +131,15 @@ interface ExpenseContextType {
   addTransactions: (txns: StoredTransaction[]) => void;
   updateTransactions: (ids: string[], changes: TransactionChanges) => void;
   deleteTransactions: (ids: string[]) => void;
+  /**
+   * Replace one transaction with 2+ parts that must sum to its amount.
+   * Parts keep the parent's date, description and account; each part gets
+   * its own category, amount and notes. Single write — aggregates stay exact.
+   */
+  splitTransaction: (
+    id: string,
+    parts: Array<{ amount: number; category: string; notes: string }>
+  ) => void;
   /** Set each transaction's category individually (used to undo a rule run) */
   revertCategories: (items: Array<{ id: string; category: string }>) => void;
 
@@ -815,6 +824,28 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     [stored, persistTxns]
   );
 
+  const splitTransaction = useCallback(
+    (id: string, parts: Array<{ amount: number; category: string; notes: string }>) => {
+      const parent = stored.find((t) => t.id === id);
+      if (!parent || parts.length < 2) return;
+      const base = uid();
+      const rows: StoredTransaction[] = parts.map((p, i) => ({
+        id: base + i.toString(36),
+        date: parent.date,
+        description: parent.description,
+        amount: p.amount,
+        category: p.category,
+        group: DEFAULT_GROUP,
+        account: parent.account,
+        notes: p.notes,
+      }));
+      const { normalized, defs, defsChanged } = normalizeAgainstTree(rows);
+      persistTxns(stored.flatMap((t) => (t.id === id ? normalized : [t])));
+      if (defsChanged) persistDefs(defs);
+    },
+    [stored, normalizeAgainstTree, persistTxns, persistDefs]
+  );
+
   // ---------- Category tree management ----------
   const addCategory = useCallback(
     (name: string, group: string) => {
@@ -1081,6 +1112,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     addTransactions,
     updateTransactions,
     deleteTransactions,
+    splitTransaction,
     revertCategories,
     addCategory,
     renameCategory,

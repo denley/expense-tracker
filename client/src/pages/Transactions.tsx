@@ -10,6 +10,7 @@ import type { Transaction } from "@/lib/types";
 import { UNCATEGORIZED } from "@/lib/types";
 import LoadingState from "@/components/LoadingState";
 import TransactionEditDialog from "@/components/TransactionEditDialog";
+import SplitTransactionDialog from "@/components/SplitTransactionDialog";
 import RuleQuickDialog from "@/components/RuleQuickDialog";
 import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
 import { CategoryPicker } from "@/components/pickers";
@@ -19,7 +20,7 @@ import { dedupKey } from "@/lib/csv";
 import { normalizeMerchant, suggestPatternsForUncategorised, type RuleChange } from "@/lib/rules";
 import {
   Search, ArrowUpDown, Plus, X, Trash2, Download, Filter,
-  CheckSquare, PencilLine, Wand2, Copy, Lightbulb,
+  CheckSquare, PencilLine, Wand2, Copy, Lightbulb, Split,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -65,6 +66,9 @@ export default function Transactions() {
   // Edit dialog
   const [editTxn, setEditTxn] = useState<Transaction | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+
+  // Split dialog
+  const [splitTxn, setSplitTxn] = useState<Transaction | null>(null);
 
   // Rule-from-transaction dialog
   const [ruleSeed, setRuleSeed] = useState<{ pattern: string; category: string } | null>(null);
@@ -526,6 +530,13 @@ export default function Transactions() {
                         <Wand2 className="w-3.5 h-3.5" />
                       </button>
                       <button
+                        onClick={() => setSplitTxn(t)}
+                        className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                        title="Split into multiple transactions"
+                      >
+                        <Split className="w-3.5 h-3.5" />
+                      </button>
+                      <button
                         onClick={() => { setEditTxn(t); setDialogOpen(true); }}
                         className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
                         title="Edit"
@@ -635,6 +646,12 @@ export default function Transactions() {
       </AlertDialog>
 
       <TransactionEditDialog open={dialogOpen} onOpenChange={setDialogOpen} transaction={editTxn} />
+
+      <SplitTransactionDialog
+        open={splitTxn !== null}
+        onOpenChange={(o) => !o && setSplitTxn(null)}
+        transaction={splitTxn}
+      />
 
       <RuleQuickDialog
         open={ruleSeed !== null}
