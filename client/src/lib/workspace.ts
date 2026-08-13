@@ -229,6 +229,12 @@ export interface WorkspaceData {
   rules: Rule[];
   importProfiles: ImportProfile[];
   hasTransactionsFile: boolean;
+  /**
+   * transactions.csv exists but couldn't be parsed (missing/invalid header).
+   * The app must NOT proceed as if there were zero transactions — a later
+   * write would replace the file's real contents with emptiness.
+   */
+  transactionsUnreadable: boolean;
 }
 
 export async function readWorkspace(
@@ -258,14 +264,17 @@ export async function readWorkspace(
     }
   }
 
+  const parsedTxns = txnFile ? csvToTransactions(txnFile.text) : [];
+
   return {
     data: {
-      transactions: txnFile ? csvToTransactions(txnFile.text) ?? [] : [],
+      transactions: parsedTxns ?? [],
       categories: catFile ? csvToCategories(catFile.text) : [],
       projects: projFile ? csvToProjects(projFile.text) : [],
       rules: ruleFile ? csvToRules(ruleFile.text) : [],
       importProfiles,
       hasTransactionsFile: !!txnFile,
+      transactionsUnreadable: !!txnFile && parsedTxns === null,
     },
     mtimes,
   };

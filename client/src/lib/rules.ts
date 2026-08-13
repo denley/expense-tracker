@@ -120,14 +120,15 @@ export function suggestPatternsForUncategorised(
   );
   if (uncat.length === 0) return [];
 
-  // Candidate patterns: the normalized merchant, its first token, first two tokens
+  // Candidate patterns: every token-prefix of the normalized merchant, so the
+  // greedy pass below can settle on the longest phrase that keeps full coverage
   const existingPatterns = new Set(rules.map((r) => r.pattern.trim().toLowerCase()));
   const candidates = new Map<string, string>(); // lowercase key → display form
   for (const t of uncat) {
-    const merchant = normalizeMerchant(t.description);
-    const tokens = merchant.split(" ");
-    for (const cand of [merchant, tokens[0], tokens.slice(0, 2).join(" ")]) {
-      if (!cand || cand.length < 4) continue;
+    const tokens = normalizeMerchant(t.description).split(" ");
+    for (let i = 1; i <= tokens.length; i++) {
+      const cand = tokens.slice(0, i).join(" ");
+      if (cand.length < 4) continue;
       const key = cand.toLowerCase();
       if (existingPatterns.has(key)) continue;
       if (!candidates.has(key)) candidates.set(key, cand);
@@ -141,7 +142,9 @@ export function suggestPatternsForUncategorised(
   }));
 
   // Greedy: repeatedly take the pattern covering the most uncovered transactions.
-  // Ties prefer the shorter pattern — same coverage today, catches more variants later.
+  // Ties prefer the LONGER phrase — same coverage but more specific, so it can't
+  // over-match, and it's easy to trim down in the rule dialog. A bare keyword
+  // only wins when it genuinely covers more than any longer phrase.
   const covered = new Set<string>();
   const picked: Array<{ display: string; count: number }> = [];
   while (picked.length < limit) {
@@ -152,7 +155,7 @@ export function suggestPatternsForUncategorised(
       if (
         !best ||
         n > best.count ||
-        (n === best.count && c.display.length < best.display.length)
+        (n === best.count && c.display.length > best.display.length)
       ) {
         best = { display: c.display, count: n };
       }
@@ -163,9 +166,10 @@ export function suggestPatternsForUncategorised(
     chosen.ids.forEach((id) => covered.add(id));
   }
 
-  // Guess a category from how the same pattern is categorised elsewhere
-  return picked.map(({ display, count }) => {
-    const key = display.toLowerCase();
+  // Guess a category from how the pattern is categorised elsewhere, falling
+  // back through shorter prefixes (a long phrase rarely has exact history,
+  // but its leading keyword often does)
+  const guessCategory = (key: string): string | undefined => {
     const cats = new Map<string, number>();
     let total = 0;
     for (const t of transactions) {
@@ -175,11 +179,18 @@ export function suggestPatternsForUncategorised(
       total++;
     }
     const top = [...cats.entries()].sort((a, b) => b[1] - a[1])[0];
-    return {
-      pattern: display,
-      count,
-      suggestedCategory: top && total >= 2 && top[1] / total >= 0.9 ? top[0] : undefined,
-    };
+    return top && total >= 2 && top[1] / total >= 0.9 ? top[0] : undefined;
+  };
+
+  return picked.map(({ display, count }) => {
+    const tokens = display.toLowerCase().split(" ");
+    let suggestedCategory: string | undefined;
+    for (let i = tokens.length; i >= 1 && !suggestedCategory; i--) {
+      const prefix = tokens.slice(0, i).join(" ");
+      if (prefix.length < 4) break;
+      suggestedCategory = guessCategory(prefix);
+    }
+    return { pattern: display, count, suggestedCategory };
   });
 }
 

@@ -255,6 +255,12 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
 
   const dirRef = useRef<FileSystemDirectoryHandle | null>(null);
   const handleRef = useRef<FileSystemDirectoryHandle | null>(null);
+  /**
+   * Mutations may only persist once the workspace is fully loaded. Guards
+   * against a half-booted (or crash-remounted) instance writing its empty
+   * in-memory state over a good file on disk.
+   */
+  const canMutateRef = useRef(false);
   const mtimesRef = useRef<Record<string, number>>({});
   const writeQueue = useRef<Record<string, Promise<void>>>({});
   const checkingRef = useRef(false);
@@ -282,40 +288,52 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
       });
   }, []);
 
+  const guardMutation = useCallback(() => {
+    if (canMutateRef.current) return true;
+    console.warn("Mutation ignored — workspace not fully loaded");
+    toast.error("Data folder isn't loaded yet — change not saved");
+    return false;
+  }, []);
+
   const persistTxns = useCallback(
     (next: StoredTransaction[]) => {
+      if (!guardMutation()) return;
       setStored(next);
       scheduleWrite(WS_FILES.transactions, serializeTxns(next));
     },
-    [scheduleWrite]
+    [scheduleWrite, guardMutation]
   );
   const persistDefs = useCallback(
     (next: CategoryDef[]) => {
+      if (!guardMutation()) return;
       setCategoryDefs(next);
       scheduleWrite(WS_FILES.categories, categoriesToCsv(next));
     },
-    [scheduleWrite]
+    [scheduleWrite, guardMutation]
   );
   const persistProjects = useCallback(
     (next: Project[]) => {
+      if (!guardMutation()) return;
       setProjects(next);
       scheduleWrite(WS_FILES.projects, projectsToCsv(next));
     },
-    [scheduleWrite]
+    [scheduleWrite, guardMutation]
   );
   const persistRules = useCallback(
     (next: Rule[]) => {
+      if (!guardMutation()) return;
       setRules(next);
       scheduleWrite(WS_FILES.rules, rulesToCsv(next));
     },
-    [scheduleWrite]
+    [scheduleWrite, guardMutation]
   );
   const persistProfiles = useCallback(
     (next: ImportProfile[]) => {
+      if (!guardMutation()) return;
       setImportProfiles(next);
       scheduleWrite(WS_FILES.profiles, JSON.stringify(next, null, 2) + "\n");
     },
-    [scheduleWrite]
+    [scheduleWrite, guardMutation]
   );
   const persistSettings = useCallback((next: Settings) => {
     setSettings(next);
@@ -352,6 +370,21 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
       connectingRef.current = true;
       try {
         const { data, mtimes } = await readWorkspace(dir);
+
+        // A present-but-unparseable transactions.csv must never load as
+        // "zero transactions" — a later write would wipe the real contents.
+        if (data.transactionsUnreadable) {
+          handleRef.current = dir;
+          setWsName(dir.name);
+          setWsError(
+            "transactions.csv exists but couldn't be parsed (missing or invalid header row). " +
+              "Not loading it, to avoid overwriting its contents. Fix or remove the file, then reconnect."
+          );
+          setWsStatus("error");
+          setLoading(false);
+          return;
+        }
+
         dirRef.current = dir;
 
         if (!data.hasTransactionsFile) {
@@ -391,6 +424,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         setWsName(dir.name);
         setWsError(null);
         setWsStatus("connected");
+        canMutateRef.current = true;
         setLoading(false);
       } catch (e) {
         setWsError(e instanceof Error ? e.message : "Failed to read the data folder");
@@ -496,6 +530,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
 
   const disconnectWorkspace = useCallback(async () => {
     await clearWorkspaceHandle();
+    canMutateRef.current = false;
     dirRef.current = null;
     handleRef.current = null;
     mtimesRef.current = {};
@@ -527,6 +562,14 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         }
         if (changed) {
           const { data, mtimes } = await readWorkspace(dir);
+          if (data.transactionsUnreadable) {
+            // Remember the mtimes so this doesn't re-toast every poll
+            mtimesRef.current = { ...mtimesRef.current, ...mtimes };
+            toast.error(
+              "transactions.csv changed on disk but couldn't be parsed — keeping the current data"
+            );
+            return;
+          }
           applyLoaded(data, mtimes);
           if (!force) toast.info("Data files changed on disk — reloaded");
         }

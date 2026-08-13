@@ -18,19 +18,23 @@ export interface BackupFile {
   importProfiles: ImportProfile[];
 }
 
+const TXN_FIELDS = ["ID", "Date", "Description", "Amount", "Category", "Group", "Account", "Notes"];
+
 export function transactionsToCsv(transactions: StoredTransaction[]): string {
-  const rows = transactions.map((t) => ({
-    ID: t.id,
-    Date: t.date,
-    Description: t.description,
-    Amount: t.amount.toFixed(2),
-    Category: t.category,
-    Group: t.group,
-    Account: t.account,
-    Notes: t.notes,
-  }));
+  const rows = transactions.map((t) => [
+    t.id,
+    t.date,
+    t.description,
+    t.amount.toFixed(2),
+    t.category,
+    t.group,
+    t.account,
+    t.notes,
+  ]);
+  // Explicit fields so an empty list still produces the header row — a file
+  // without it reads back as unparseable, not as "zero transactions".
   // Unix newlines: agents and scripts append with "\n"; mixed endings break parsing
-  return Papa.unparse(rows, { newline: "\n" });
+  return Papa.unparse({ fields: TXN_FIELDS, data: rows }, { newline: "\n" });
 }
 
 /** Parse a CSV previously exported by transactionsToCsv (matched by ID column) */
