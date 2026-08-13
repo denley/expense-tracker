@@ -37,8 +37,8 @@ import { cn } from "@/lib/utils";
 
 export default function Projects() {
   const {
-    loading, allTransactions, projects, categoryDefs, allGroups,
-    addProject, updateProject, deleteProject,
+    loading, allTransactions, projects, categoryDefs, allGroups, categoryGroups,
+    addProject, updateProject, deleteProject, addCategory,
   } = useExpenses();
   const [, navigate] = useLocation();
   const [location] = useLocation();
@@ -55,6 +55,26 @@ export default function Projects() {
   const [budget, setBudget] = useState("");
   const [notes, setNotes] = useState("");
   const [starterCats, setStarterCats] = useState("");
+
+  // Inline "add category" on the project detail card
+  const [newCat, setNewCat] = useState("");
+
+  const addCategoryToProject = (project: Project) => {
+    const cat = newCat.trim();
+    if (!cat) return;
+    const existingGroup = categoryGroups.get(cat);
+    if (existingGroup !== undefined) {
+      toast.error(
+        existingGroup === project.name
+          ? `"${cat}" is already in this project`
+          : `"${cat}" already exists in ${existingGroup} — pick a distinct name (e.g. "${project.name} – ${cat}")`
+      );
+      return;
+    }
+    addCategory(cat, project.name);
+    setNewCat("");
+    toast.success(`Added "${cat}" to ${project.name}`);
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -270,7 +290,7 @@ export default function Projects() {
             return (
               <div
                 key={p.id}
-                onClick={() => setSelectedId(isSelected ? null : p.id)}
+                onClick={() => { setSelectedId(isSelected ? null : p.id); setNewCat(""); }}
                 className={cn(
                   "bg-card rounded-xl border p-5 cursor-pointer transition-all",
                   isSelected ? "border-primary/50 shadow-md" : "border-border hover:border-primary/30 hover:shadow-sm",
@@ -415,22 +435,43 @@ export default function Projects() {
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
               Categories in this project
             </p>
-            <div className="flex flex-wrap gap-1.5">
-              {selectedCategoryDefs.length > 0 ? (
-                selectedCategoryDefs.map((d) => (
-                  <button
-                    key={d.name}
-                    onClick={() => navigate(`/transactions?category=${encodeURIComponent(d.name)}`)}
-                    className="px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors hover:bg-accent"
-                    style={{ borderColor: `${selected.color}60`, color: selected.color }}
-                  >
-                    {d.name}
-                  </button>
-                ))
-              ) : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {selectedCategoryDefs.map((d) => (
+                <button
+                  key={d.name}
+                  onClick={() => navigate(`/transactions?category=${encodeURIComponent(d.name)}`)}
+                  className="px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors hover:bg-accent"
+                  style={{ borderColor: `${selected.color}60`, color: selected.color }}
+                  title="View these transactions"
+                >
+                  {d.name}
+                </button>
+              ))}
+              {selectedCategoryDefs.length === 0 && (
                 <p className="text-xs text-muted-foreground italic">
-                  None yet — create them from any category picker ("＋ New category…" with group "{selected.name}").
+                  None yet — add the first one:
                 </p>
+              )}
+              {selected.status === "active" && (
+                <span className="inline-flex items-center gap-1">
+                  <input
+                    value={newCat}
+                    onChange={(e) => setNewCat(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addCategoryToProject(selected);
+                    }}
+                    placeholder="Add category…"
+                    className="w-[130px] px-2.5 py-1 text-[11px] bg-background border border-border rounded-full focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  <button
+                    onClick={() => addCategoryToProject(selected)}
+                    disabled={!newCat.trim()}
+                    className="p-1 rounded-full text-muted-foreground hover:text-primary hover:bg-accent disabled:opacity-40 transition-colors"
+                    title="Add category to this project"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </span>
               )}
             </div>
           </div>
