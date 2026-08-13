@@ -16,10 +16,10 @@ import { CategoryPicker } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatDate } from "@/lib/utils";
 import { transactionsToCsv, downloadFile } from "@/lib/export";
 import { dedupKey } from "@/lib/csv";
-import { normalizeMerchant, type RuleChange } from "@/lib/rules";
+import { normalizeMerchant, suggestPatternsForUncategorised, type RuleChange } from "@/lib/rules";
 import {
   Search, ArrowUpDown, Plus, X, Trash2, Download, Filter,
-  CheckSquare, PencilLine, Wand2, Copy,
+  CheckSquare, PencilLine, Wand2, Copy, Lightbulb,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -137,6 +137,12 @@ export default function Transactions() {
   const dupCount = useMemo(
     () => transactions.filter((t) => duplicateIds.has(t.id)).length,
     [transactions, duplicateIds]
+  );
+
+  // Keywords that would cover several uncategorised transactions — click to draft a rule
+  const ruleSuggestions = useMemo(
+    () => suggestPatternsForUncategorised(transactions, rules),
+    [transactions, rules]
   );
 
   const hasFilters = !!(search || category || group || account || dateFrom || dateTo || uncatOnly || dupOnly);
@@ -360,6 +366,38 @@ export default function Transactions() {
           )}
         </div>
       </motion.div>
+
+      {/* Suggested rules covering the uncategorised pile */}
+      {ruleSuggestions.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.12 }}
+          className="bg-card rounded-xl border border-border p-3"
+        >
+          <p className="flex items-center gap-1.5 text-xs font-medium text-foreground mb-2">
+            <Lightbulb className="w-3.5 h-3.5 text-sandstone" />
+            Suggested rules — keywords covering your uncategorised transactions (click to review)
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {ruleSuggestions.map((s) => (
+              <button
+                key={s.pattern}
+                onClick={() => setRuleSeed({ pattern: s.pattern, category: s.suggestedCategory ?? "" })}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] border border-border hover:bg-accent hover:border-primary/40 transition-colors"
+                title={`Covers ${s.count} uncategorised transaction${s.count === 1 ? "" : "s"} — opens the rule dialog to review the matches`}
+              >
+                <Wand2 className="w-3 h-3 text-muted-foreground" />
+                <span className="font-medium">"{s.pattern}"</span>
+                <span className="text-muted-foreground">×{s.count}</span>
+                {s.suggestedCategory && (
+                  <span className="text-primary">→ {s.suggestedCategory}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </motion.div>
+      )}
 
       {/* Table */}
       <motion.div

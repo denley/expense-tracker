@@ -92,6 +92,97 @@ export function suggestRulesFromHistory(
   return suggestions.sort((a, b) => b.count - a.count);
 }
 
+export interface UncatSuggestion {
+  pattern: string;
+  /** Uncategorised transactions this pattern would cover */
+  count: number;
+  /** Category guess when the same merchant is consistently categorised elsewhere */
+  suggestedCategory?: string;
+}
+
+/**
+ * Mine the uncategorised pile for recurring keywords / key-phrases, ranked by
+ * how many transactions each would cover (greedy set cover, so suggestions
+ * don't overlap). Transactions an enabled rule already matches are excluded —
+ * "Apply Rules" handles those. Each suggestion seeds the rule dialog; the
+ * dialog's live match preview is the validation step.
+ */
+export function suggestPatternsForUncategorised(
+  transactions: Array<{ id: string; description: string; category: string }>,
+  rules: Rule[],
+  limit = 8
+): UncatSuggestion[] {
+  const active = rules.filter((r) => r.enabled && r.category);
+  const uncat = transactions.filter(
+    (t) =>
+      (!t.category || t.category === UNCATEGORIZED) &&
+      !active.some((r) => ruleMatches(r, t.description))
+  );
+  if (uncat.length === 0) return [];
+
+  // Candidate patterns: the normalized merchant, its first token, first two tokens
+  const existingPatterns = new Set(rules.map((r) => r.pattern.trim().toLowerCase()));
+  const candidates = new Map<string, string>(); // lowercase key → display form
+  for (const t of uncat) {
+    const merchant = normalizeMerchant(t.description);
+    const tokens = merchant.split(" ");
+    for (const cand of [merchant, tokens[0], tokens.slice(0, 2).join(" ")]) {
+      if (!cand || cand.length < 4) continue;
+      const key = cand.toLowerCase();
+      if (existingPatterns.has(key)) continue;
+      if (!candidates.has(key)) candidates.set(key, cand);
+    }
+  }
+
+  // Who does each candidate cover? (substring match, same as rule matching)
+  const coverage = Array.from(candidates.entries()).map(([key, display]) => ({
+    display,
+    ids: uncat.filter((t) => t.description.toLowerCase().includes(key)).map((t) => t.id),
+  }));
+
+  // Greedy: repeatedly take the pattern covering the most uncovered transactions.
+  // Ties prefer the shorter pattern — same coverage today, catches more variants later.
+  const covered = new Set<string>();
+  const picked: Array<{ display: string; count: number }> = [];
+  while (picked.length < limit) {
+    let best: { display: string; count: number } | null = null;
+    for (const c of coverage) {
+      const n = c.ids.filter((id) => !covered.has(id)).length;
+      if (n < 2) continue;
+      if (
+        !best ||
+        n > best.count ||
+        (n === best.count && c.display.length < best.display.length)
+      ) {
+        best = { display: c.display, count: n };
+      }
+    }
+    if (!best) break;
+    picked.push(best);
+    const chosen = coverage.find((c) => c.display === best!.display)!;
+    chosen.ids.forEach((id) => covered.add(id));
+  }
+
+  // Guess a category from how the same pattern is categorised elsewhere
+  return picked.map(({ display, count }) => {
+    const key = display.toLowerCase();
+    const cats = new Map<string, number>();
+    let total = 0;
+    for (const t of transactions) {
+      if (!t.category || t.category === UNCATEGORIZED) continue;
+      if (!t.description.toLowerCase().includes(key)) continue;
+      cats.set(t.category, (cats.get(t.category) || 0) + 1);
+      total++;
+    }
+    const top = [...cats.entries()].sort((a, b) => b[1] - a[1])[0];
+    return {
+      pattern: display,
+      count,
+      suggestedCategory: top && total >= 2 && top[1] / total >= 0.9 ? top[0] : undefined,
+    };
+  });
+}
+
 /** Strip payment-processor noise and location suffixes from raw bank descriptions */
 export function normalizeMerchant(description: string): string {
   return description
