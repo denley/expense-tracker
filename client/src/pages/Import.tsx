@@ -50,6 +50,7 @@ export default function Import() {
   const [dateFormat, setDateFormat] = useState<DateFormat>("DMY");
   const [convention, setConvention] = useState<AmountConvention>("negativeIsExpense");
   const [account, setAccount] = useState("");
+  const [fxRateStr, setFxRateStr] = useState("");
   const [importCategory, setImportCategory] = useState("");
   const [includeDuplicates, setIncludeDuplicates] = useState(false);
   const [useRules, setUseRules] = useState(true);
@@ -73,8 +74,15 @@ export default function Import() {
     setDateFormat(p.dateFormat);
     setConvention(p.amountConvention);
     setAccount(p.account);
+    setFxRateStr(p.fxRate !== undefined ? String(p.fxRate) : "");
     setProfileName(p.name);
   };
+
+  // Blank / invalid / 1 all mean "no conversion"
+  const fxRate = useMemo(() => {
+    const n = parseFloat(fxRateStr);
+    return isNaN(n) || n <= 0 || n === 1 ? undefined : n;
+  }, [fxRateStr]);
 
   const handleFile = useCallback(async (file: File) => {
     try {
@@ -119,8 +127,8 @@ export default function Import() {
 
   const { candidates, errors } = useMemo(() => {
     if (!parsed) return { candidates: [] as ImportCandidate[], errors: [] as RowError[] };
-    return buildCandidates(parsed.rows, mapping, dateFormat, convention, account, existingKeys);
-  }, [parsed, mapping, dateFormat, convention, account, existingKeys]);
+    return buildCandidates(parsed.rows, mapping, dateFormat, convention, account, existingKeys, fxRate);
+  }, [parsed, mapping, dateFormat, convention, account, existingKeys, fxRate]);
 
   // Whole-import category + rule-based categorisation preview.
   // rulePatternById records which rule categorised each row, for the preview.
@@ -173,6 +181,7 @@ export default function Import() {
         dateFormat,
         amountConvention: convention,
         hasHeader: parsed?.hasHeader ?? true,
+        ...(fxRate !== undefined ? { fxRate } : {}),
       });
     }
     toast.success(`Imported ${toImport.length} transactions`);
@@ -186,6 +195,7 @@ export default function Import() {
     setParsed(null);
     setFileName("");
     setAccount("");
+    setFxRateStr("");
     setImportCategory("");
     setProfileName("");
     setIncludeDuplicates(false);
@@ -347,7 +357,7 @@ export default function Import() {
               ))}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">Date format</label>
                 <select value={dateFormat} onChange={(e) => setDateFormat(e.target.value as DateFormat)} className={inputCls}>
@@ -375,7 +385,27 @@ export default function Import() {
                   className={inputCls}
                 />
               </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                  FX rate → AUD (foreign currency)
+                </label>
+                <input
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  value={fxRateStr}
+                  onChange={(e) => setFxRateStr(e.target.value)}
+                  placeholder="e.g. 1.52 for USD"
+                  className={inputCls}
+                />
+              </div>
             </div>
+            {fxRate !== undefined && (
+              <p className="text-xs text-muted-foreground">
+                Amounts will be multiplied by {fxRate} on import; the original amounts are kept
+                alongside for the audit trail and duplicate detection.
+              </p>
+            )}
 
             {/* Raw preview */}
             <div className="overflow-x-auto border border-border rounded-lg">
@@ -570,6 +600,11 @@ export default function Import() {
                         </td>
                         <td className={cn("px-3 py-1.5 text-right whitespace-nowrap tabular-nums font-medium align-top", t.amount < 0 && "text-eucalyptus")}>
                           {formatCurrency(t.amount)}
+                          {t.originalAmount !== undefined && (
+                            <div className="text-[10px] font-normal text-muted-foreground">
+                              {t.originalAmount.toFixed(2)} × {t.fxRate}
+                            </div>
+                          )}
                         </td>
                         <td className="px-3 py-1.5 whitespace-nowrap align-top">
                           {dup ? (

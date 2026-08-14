@@ -8,6 +8,10 @@ export interface Transaction {
   group: string; // always derived from the category's group (strict tree)
   account: string; // source account/bank, e.g. "ANZ Visa"
   notes: string;
+  /** For foreign-currency imports: the source-currency amount before conversion (audit trail) */
+  originalAmount?: number;
+  /** Rate applied at import: amount = originalAmount × fxRate */
+  fxRate?: number;
 }
 
 /** Serialized form stored in IndexedDB / JSON export */
@@ -20,6 +24,8 @@ export interface StoredTransaction {
   group: string;
   account: string;
   notes: string;
+  originalAmount?: number;
+  fxRate?: number;
 }
 
 /**
@@ -68,6 +74,8 @@ export interface ImportProfile {
   dateFormat: DateFormat;
   amountConvention: AmountConvention;
   hasHeader: boolean;
+  /** Multiplier applied to amounts on import (foreign-currency accounts), e.g. USD→AUD 1.52 */
+  fxRate?: number;
 }
 
 export interface ColumnMapping {

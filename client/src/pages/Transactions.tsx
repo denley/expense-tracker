@@ -90,7 +90,7 @@ export default function Transactions() {
   const duplicateIds = useMemo(() => {
     const byKey = new Map<string, string[]>();
     for (const t of allTransactions) {
-      const key = dedupKey({ date: t.dateStr, amount: t.amount, description: t.description });
+      const key = dedupKey({ date: t.dateStr, amount: t.amount, description: t.description, originalAmount: t.originalAmount });
       if (!byKey.has(key)) byKey.set(key, []);
       byKey.get(key)!.push(t.id);
     }

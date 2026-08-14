@@ -196,10 +196,19 @@ export interface RowError {
   reason: string;
 }
 
-/** Dedup key: date + rounded amount + normalized description */
-export function dedupKey(t: { date: string; amount: number; description: string }): string {
+/**
+ * Dedup key: date + rounded amount + normalized description.
+ * FX-converted rows key on the original (source-currency) amount so the same
+ * bank row still matches even if a different rate was used at import time.
+ */
+export function dedupKey(t: {
+  date: string;
+  amount: number;
+  description: string;
+  originalAmount?: number;
+}): string {
   const desc = t.description.toLowerCase().replace(/\s+/g, " ").trim();
-  return `${t.date}|${t.amount.toFixed(2)}|${desc}`;
+  return `${t.date}|${(t.originalAmount ?? t.amount).toFixed(2)}|${desc}`;
 }
 
 export function buildCandidates(
@@ -208,7 +217,8 @@ export function buildCandidates(
   dateFormat: DateFormat,
   convention: AmountConvention,
   account: string,
-  existingKeys: Set<string>
+  existingKeys: Set<string>,
+  fxRate?: number
 ): { candidates: ImportCandidate[]; errors: RowError[] } {
   const candidates: ImportCandidate[] = [];
   const errors: RowError[] = [];
@@ -241,11 +251,14 @@ export function buildCandidates(
     }
 
     const description = (row[mapping.description] ?? "").trim();
+    const convert = fxRate !== undefined && fxRate > 0 && fxRate !== 1;
+    const original = Math.round(amount * 100) / 100;
     const txn: StoredTransaction = {
       id: uid() + rowIndex.toString(36),
       date,
       description,
-      amount: Math.round(amount * 100) / 100,
+      amount: convert ? Math.round(original * fxRate * 100) / 100 : original,
+      ...(convert ? { originalAmount: original, fxRate } : {}),
       category: (mapping.category !== undefined && row[mapping.category]?.trim()) || UNCATEGORIZED,
       group: (mapping.group !== undefined && row[mapping.group]?.trim()) || DEFAULT_GROUP,
       account: (mapping.account !== undefined && row[mapping.account]?.trim()) || account,

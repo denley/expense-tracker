@@ -18,7 +18,7 @@ export interface BackupFile {
   importProfiles: ImportProfile[];
 }
 
-const TXN_FIELDS = ["ID", "Date", "Description", "Amount", "Category", "Group", "Account", "Notes"];
+const TXN_FIELDS = ["ID", "Date", "Description", "Amount", "Category", "Group", "Account", "Notes", "OriginalAmount", "FxRate"];
 
 export function transactionsToCsv(transactions: StoredTransaction[]): string {
   const rows = transactions.map((t) => [
@@ -30,6 +30,8 @@ export function transactionsToCsv(transactions: StoredTransaction[]): string {
     t.group,
     t.account,
     t.notes,
+    t.originalAmount !== undefined ? t.originalAmount.toFixed(2) : "",
+    t.fxRate !== undefined ? String(t.fxRate) : "",
   ]);
   // Explicit fields so an empty list still produces the header row — a file
   // without it reads back as unparseable, not as "zero transactions".
@@ -49,16 +51,22 @@ export function csvToTransactions(text: string): StoredTransaction[] | null {
   }
   return result.data
     .filter((r) => r.ID && r.Date)
-    .map((r) => ({
-      id: r.ID,
-      date: r.Date,
-      description: r.Description ?? "",
-      amount: parseFloat(r.Amount) || 0,
-      category: r.Category || "Uncategorized",
-      group: r.Group || "Other",
-      account: r.Account ?? "",
-      notes: r.Notes ?? "",
-    }));
+    .map((r) => {
+      const originalAmount = parseFloat(r.OriginalAmount ?? "");
+      const fxRate = parseFloat(r.FxRate ?? "");
+      return {
+        id: r.ID,
+        date: r.Date,
+        description: r.Description ?? "",
+        amount: parseFloat(r.Amount) || 0,
+        category: r.Category || "Uncategorized",
+        group: r.Group || "Other",
+        account: r.Account ?? "",
+        notes: r.Notes ?? "",
+        ...(isNaN(originalAmount) ? {} : { originalAmount }),
+        ...(isNaN(fxRate) ? {} : { fxRate }),
+      };
+    });
 }
 
 export function makeBackup(
@@ -94,6 +102,8 @@ export function parseBackup(text: string): BackupFile | null {
       group: t.group || "Other",
       account: t.account ?? "",
       notes: t.notes ?? "",
+      ...(typeof t.originalAmount === "number" ? { originalAmount: t.originalAmount } : {}),
+      ...(typeof t.fxRate === "number" ? { fxRate: t.fxRate } : {}),
     }));
     const projects: Project[] = Array.isArray(data.projects)
       ? data.projects.map((p: any) => {

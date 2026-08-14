@@ -125,6 +125,11 @@ export default function TransactionEditDialog({ open, onOpenChange, transaction 
                 placeholder="0.00"
                 className={inputCls}
               />
+              {transaction?.originalAmount !== undefined && (
+                <p className="text-[10px] text-muted-foreground mt-1 tabular-nums">
+                  Imported as {transaction.originalAmount.toFixed(2)} foreign × rate {transaction.fxRate}
+                </p>
+              )}
             </div>
           </div>
 

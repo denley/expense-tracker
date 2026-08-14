@@ -294,15 +294,18 @@ disk" on its Data page).
 
 ### transactions.csv — every transaction
 \`\`\`
-ID,Date,Description,Amount,Category,Group,Account,Notes
+ID,Date,Description,Amount,Category,Group,Account,Notes,OriginalAmount,FxRate
 \`\`\`
 - \`ID\` — stable unique row id. **Never change it**; the app uses it to track rows. For new rows, use any unique string.
 - \`Date\` — ISO \`yyyy-mm-dd\`
-- \`Amount\` — plain number, 2 decimals. **Positive = expense, negative = income/refund.**
+- \`Amount\` — plain number, 2 decimals, **always AUD**. **Positive = expense, negative = income/refund.**
 - \`Category\` — the fine-grained label. \`Uncategorized\` marks rows needing triage.
 - \`Group\` — the pie-chart bucket. Informational for known categories (categories.csv is authoritative); for a category not yet in categories.csv, this value places it in the tree.
 - \`Account\` — optional source account label (e.g. "ANZ Visa")
 - \`Notes\` — optional free text
+- \`OriginalAmount\`, \`FxRate\` — only set for foreign-currency imports: the source-currency
+  amount and the rate used, so \`Amount ≈ OriginalAmount × FxRate\` (audit trail; both blank
+  for native-AUD rows). Duplicate detection matches on \`OriginalAmount\` when present.
 
 ### categories.csv — the category tree
 \`\`\`
