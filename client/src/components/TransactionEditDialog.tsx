@@ -1,12 +1,12 @@
 /*
   Edit (or create) a single transaction in a dialog.
   Pass transaction=null with open=true for "add transaction" mode.
-  The group is derived from the category (strict tree) and shown read-only.
+  The full tree path of the chosen category is shown read-only.
 */
 import { useEffect, useState } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { Transaction } from "@/lib/types";
-import { UNCATEGORIZED } from "@/lib/types";
+import { UNCATEGORIZED_ID } from "@/lib/tree";
 import { uid } from "@/lib/db";
 import {
   Dialog,
@@ -26,12 +26,12 @@ interface Props {
 }
 
 export default function TransactionEditDialog({ open, onOpenChange, transaction }: Props) {
-  const { updateTransactions, addTransactions, deleteTransactions, groupOf } = useExpenses();
+  const { updateTransactions, addTransactions, deleteTransactions, pathOf } = useExpenses();
 
   const [date, setDate] = useState("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState(UNCATEGORIZED);
+  const [categoryId, setCategoryId] = useState(UNCATEGORIZED_ID);
   const [account, setAccount] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -41,14 +41,14 @@ export default function TransactionEditDialog({ open, onOpenChange, transaction 
       setDate(transaction.dateStr);
       setDescription(transaction.description);
       setAmount(String(transaction.amount));
-      setCategory(transaction.category);
+      setCategoryId(transaction.categoryId);
       setAccount(transaction.account);
       setNotes(transaction.notes);
     } else {
       setDate(new Date().toISOString().slice(0, 10));
       setDescription("");
       setAmount("");
-      setCategory(UNCATEGORIZED);
+      setCategoryId(UNCATEGORIZED_ID);
       setAccount("");
       setNotes("");
     }
@@ -65,7 +65,7 @@ export default function TransactionEditDialog({ open, onOpenChange, transaction 
         date,
         description,
         amount: amt,
-        category,
+        categoryId,
         account,
         notes,
       });
@@ -77,8 +77,7 @@ export default function TransactionEditDialog({ open, onOpenChange, transaction 
           date,
           description,
           amount: amt,
-          category,
-          group: groupOf(category),
+          categoryId,
           account,
           notes,
         },
@@ -145,9 +144,9 @@ export default function TransactionEditDialog({ open, onOpenChange, transaction 
 
           <div>
             <label className="text-xs font-medium text-muted-foreground mb-1 block">
-              Category <span className="normal-case font-normal">(group: {groupOf(category)})</span>
+              Category <span className="normal-case font-normal">({pathOf(categoryId)})</span>
             </label>
-            <CategoryPicker value={category} onChange={setCategory} />
+            <CategoryPicker value={categoryId} onChange={setCategoryId} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">

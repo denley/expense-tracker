@@ -7,7 +7,7 @@
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Tags, Calendar, TrendingUp, Sun, Moon,
-  ReceiptText, FolderKanban, UploadCloud, Database,
+  ReceiptText, UploadCloud, Database,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useExpenses } from "@/contexts/ExpenseContext";
@@ -19,7 +19,6 @@ const navSections = [
     items: [
       { path: "/", label: "Dashboard", icon: LayoutDashboard },
       { path: "/transactions", label: "Transactions", icon: ReceiptText },
-      { path: "/projects", label: "Projects", icon: FolderKanban },
     ],
   },
   {
@@ -44,7 +43,22 @@ const allItems = navSections.flatMap((s) => s.items);
 export default function Navigation() {
   const [location] = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const { scopeLabel, workspaceName } = useExpenses();
+  const { scopeLabel, workspaceName, hideOneOffs, setHideOneOffs, hasOneOffSpend } = useExpenses();
+
+  const oneOffToggle = (hasOneOffSpend || hideOneOffs) && (
+    <label
+      className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-muted-foreground cursor-pointer select-none"
+      title="Exclude one-off cost centres (trips, renovations…) from totals and trend charts"
+    >
+      <input
+        type="checkbox"
+        checked={hideOneOffs}
+        onChange={(e) => setHideOneOffs(e.target.checked)}
+        className="accent-[var(--color-eucalyptus)]"
+      />
+      Hide one-offs ◈
+    </label>
+  );
 
   return (
     <>
@@ -62,6 +76,7 @@ export default function Navigation() {
 
         <div className="px-3 pb-2">
           <ScopeSelector />
+          {oneOffToggle}
         </div>
 
         <div className="flex-1 px-3 space-y-4 overflow-y-auto">

@@ -8,7 +8,7 @@
 */
 import { useEffect, useMemo, useState } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
-import { UNCATEGORIZED } from "@/lib/types";
+import { UNCATEGORIZED_ID } from "@/lib/tree";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -23,22 +23,22 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   /** Pre-filled match pattern, e.g. the normalized merchant name */
   seedPattern: string;
-  /** Pre-selected category ("" = none yet) */
-  seedCategory: string;
+  /** Pre-selected category node id ("" = none yet) */
+  seedCategoryId: string;
 }
 
-export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedCategory }: Props) {
-  const { allTransactions, rules, addRule, updateTransactions } = useExpenses();
+export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedCategoryId }: Props) {
+  const { allTransactions, rules, addRule, updateTransactions, nameOf } = useExpenses();
   const [pattern, setPattern] = useState("");
-  const [category, setCategory] = useState("");
+  const [categoryId, setCategoryId] = useState("");
   const [reassignOthers, setReassignOthers] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setPattern(seedPattern);
-    setCategory(seedCategory);
+    setCategoryId(seedCategoryId);
     setReassignOthers(false);
-  }, [open, seedPattern, seedCategory]);
+  }, [open, seedPattern, seedCategoryId]);
 
   const trimmed = pattern.trim();
   const tooShort = trimmed.length < 3;
@@ -49,14 +49,14 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
     return allTransactions.filter((t) => t.description.toLowerCase().includes(q));
   }, [allTransactions, trimmed, tooShort]);
 
-  const uncat = useMemo(() => matches.filter((t) => t.category === UNCATEGORIZED), [matches]);
+  const uncat = useMemo(() => matches.filter((t) => t.categoryId === UNCATEGORIZED_ID), [matches]);
   const alreadyThis = useMemo(
-    () => matches.filter((t) => category && t.category === category),
-    [matches, category]
+    () => matches.filter((t) => categoryId && t.categoryId === categoryId),
+    [matches, categoryId]
   );
   const others = useMemo(
-    () => matches.filter((t) => t.category !== UNCATEGORIZED && (!category || t.category !== category)),
-    [matches, category]
+    () => matches.filter((t) => t.categoryId !== UNCATEGORIZED_ID && (!categoryId || t.categoryId !== categoryId)),
+    [matches, categoryId]
   );
 
   const existingRule = useMemo(
@@ -71,19 +71,19 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
       toast.error("Use at least 3 characters so the rule doesn't over-match");
       return;
     }
-    if (!category) {
+    if (!categoryId) {
       toast.error("Pick the category the rule assigns");
       return;
     }
-    addRule({ pattern: trimmed, isRegex: false, category, enabled: true });
+    addRule({ pattern: trimmed, isRegex: false, categoryId, enabled: true });
     if (applyNow && applyCount > 0) {
       const ids = [...uncat, ...(reassignOthers ? others : [])].map((t) => t.id);
-      updateTransactions(ids, { category });
+      updateTransactions(ids, { categoryId });
       toast.success(
-        `Rule saved — categorised ${ids.length} transaction${ids.length === 1 ? "" : "s"} as ${category}`
+        `Rule saved — categorised ${ids.length} transaction${ids.length === 1 ? "" : "s"} as ${nameOf(categoryId)}`
       );
     } else {
-      toast.success(`Rule saved: "${trimmed}" → ${category}`);
+      toast.success(`Rule saved: "${trimmed}" → ${nameOf(categoryId)}`);
     }
     onOpenChange(false);
   };
@@ -121,14 +121,14 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
               <label className="text-xs font-medium text-muted-foreground mb-1 block">
                 Assign category
               </label>
-              <CategoryPicker value={category} onChange={setCategory} allowEmpty emptyLabel="Choose category…" />
+              <CategoryPicker value={categoryId} onChange={setCategoryId} allowEmpty emptyLabel="Choose category…" />
             </div>
           </div>
 
           {existingRule && (
             <p className="flex items-center gap-1.5 text-xs text-terracotta">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-              A rule with this exact pattern already exists (→ {existingRule.category}
+              A rule with this exact pattern already exists (→ {nameOf(existingRule.categoryId)}
               {existingRule.enabled ? "" : ", disabled"}). Saving adds a second one that never
               wins — edit the existing rule on the Data page instead.
             </p>
@@ -143,7 +143,7 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
                 Matches <span className="font-semibold text-foreground">{matches.length}</span>{" "}
                 transaction{matches.length === 1 ? "" : "s"}:{" "}
                 <span className="text-terracotta font-medium">{uncat.length} uncategorised</span>
-                {category && <> · {alreadyThis.length} already {category}</>}
+                {categoryId && <> · {alreadyThis.length} already {nameOf(categoryId)}</>}
                 {others.length > 0 && <> · {others.length} categorised differently</>}
               </>
             )}
@@ -175,7 +175,7 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
                         <td
                           className={cn(
                             "px-2.5 py-1.5 whitespace-nowrap",
-                            t.category === UNCATEGORIZED ? "text-terracotta" : "text-muted-foreground"
+                            t.categoryId === UNCATEGORIZED_ID ? "text-terracotta" : "text-muted-foreground"
                           )}
                         >
                           {t.category}

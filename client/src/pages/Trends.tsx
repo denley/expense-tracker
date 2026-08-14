@@ -138,6 +138,7 @@ export default function Trends() {
           ? monthlyTotals[monthlyTotals.length - 1].value - monthlyTotals[0].value
           : 0;
         return {
+          id: g.id,
           name: g.name,
           total: g.total,
           data: monthlyTotals,
@@ -145,7 +146,7 @@ export default function Trends() {
           color: groupColors[g.name] || "#8e8ea0",
         };
       });
-  }, [groupData, monthlyData]);
+  }, [groupData, monthlyData, groupColors]);
 
   // Navigation handlers
   const handleRollingChartClick = useCallback((data: any) => {
@@ -160,12 +161,8 @@ export default function Trends() {
     }
   }, [navigate]);
 
-  const handleCategoryNav = useCallback((category: string) => {
-    navigate(`/categories?category=${encodeURIComponent(category)}`);
-  }, [navigate]);
-
-  const handleGroupNav = useCallback((group: string) => {
-    navigate(`/categories?group=${encodeURIComponent(group)}`);
+  const handleCategoryNav = useCallback((categoryId: string) => {
+    navigate(`/categories?category=${encodeURIComponent(categoryId)}`);
   }, [navigate]);
 
   const toggleMerchantSort = (field: "date" | "amount") => {
@@ -338,7 +335,7 @@ export default function Trends() {
                       </td>
                       <td className="px-5 py-2 text-xs hidden sm:table-cell">
                         <button
-                          onClick={() => handleCategoryNav(t.category)}
+                          onClick={() => handleCategoryNav(t.categoryId)}
                           className="text-primary hover:text-primary/80 hover:underline transition-colors"
                         >
                           {t.category}
@@ -420,9 +417,9 @@ export default function Trends() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {groupTrends.map((g) => (
               <div
-                key={g.name}
+                key={g.id}
                 className="bg-secondary/50 rounded-lg p-3 cursor-pointer hover:bg-secondary/80 hover:shadow-sm transition-all group"
-                onClick={() => handleGroupNav(g.name)}
+                onClick={() => handleCategoryNav(g.id)}
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-medium text-foreground group-hover:text-primary transition-colors">{g.name}</span>

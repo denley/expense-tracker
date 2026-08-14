@@ -1,9 +1,9 @@
 /*
-  DESIGN: Scandinavian Analytical — Category Deep Dive
-  - Hero banner with categories image
-  - Category selector with optgroups by group, plus group-level and "All" options
-  - Monthly trend, top merchants, transaction table
-  - Reads ?category= or ?group= from URL search params for cross-page navigation
+  DESIGN: Scandinavian Analytical — Category Drill-Down
+  One view for the whole tree: the breakdown always shows the current node's
+  children (plus a "(general)" row for spend filed directly on the node), and
+  clicking a row re-roots the view. Breadcrumb navigates back up.
+  Reads ?category=<nodeId> from URL search params for cross-page navigation.
 */
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
@@ -14,8 +14,8 @@ import LoadingState from "@/components/LoadingState";
 import TransactionEditDialog from "@/components/TransactionEditDialog";
 import { CategoryPicker } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatPercent, formatDate } from "@/lib/utils";
-import { CHART_HEX_COLORS, type Transaction } from "@/lib/types";
-import { Tags, Hash, TrendingUp, ArrowUpDown, Search, Layers, Settings2, PencilLine, ExternalLink } from "lucide-react";
+import { CHART_HEX_COLORS, type Transaction, type CategoryNode } from "@/lib/types";
+import { Tags, Hash, TrendingUp, ArrowUpDown, Search, Settings2, PencilLine, ExternalLink, ChevronRight } from "lucide-react";
 import ManageCategoriesDialog from "@/components/ManageCategoriesDialog";
 import { toast } from "sonner";
 import {
@@ -27,20 +27,12 @@ import { useLocation } from "wouter";
 
 const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-categories-nKaX5EdJLEgSi5mB7M9UuF.webp";
 
-// Selection can be: "all", "group:Groceries", or a category name like "Groceries"
-type SelectionType = "all" | string;
-
-function isGroupSelection(val: string): boolean {
-  return val.startsWith("group:");
-}
-
-function getGroupName(val: string): string {
-  return val.replace("group:", "");
-}
-
 export default function Categories() {
-  const { transactions, loading, categoryData, totalSpend, monthlyData, groupData, updateTransactions } = useExpenses();
-  const [selection, setSelection] = useState<SelectionType>("");
+  const {
+    transactions, loading, tree, nodeStats, colorOf, nameOf, updateTransactions,
+  } = useExpenses();
+  /** Current node id, or "" for the top level ("all") */
+  const [selection, setSelection] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [sortField, setSortField] = useState<"date" | "amount">("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -52,90 +44,77 @@ export default function Categories() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const categoryParam = params.get("category");
-    const groupParam = params.get("group");
-
-    if (categoryParam && categoryData.some((c) => c.name === categoryParam)) {
+    if (categoryParam && tree.byId.has(categoryParam)) {
       setSelection(categoryParam);
-    } else if (groupParam) {
-      // Navigate to the group view
-      setSelection(`group:${groupParam}`);
     }
-  }, [location, categoryData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
 
-  // Default to "all" if nothing selected
-  const activeSelection = selection || "all";
+  const node = selection ? tree.byId.get(selection) : undefined;
 
-  // Determine what we're viewing
-  const isAll = activeSelection === "all";
-  const isGroup = isGroupSelection(activeSelection);
-  const activeGroupName = isGroup ? getGroupName(activeSelection) : null;
-  const activeCategoryName = !isAll && !isGroup ? activeSelection : null;
-
-  // Group categories by group for the optgroup selector
-  const groupedCategories = useMemo(() => {
-    const groups = new Map<string, typeof categoryData>();
-    for (const c of categoryData) {
-      if (!groups.has(c.group)) {
-        groups.set(c.group, []);
-      }
-      groups.get(c.group)!.push(c);
+  // Breadcrumb: ancestors from the root down to the current node
+  const breadcrumb = useMemo(() => {
+    const chain: CategoryNode[] = [];
+    let cur = node;
+    while (cur) {
+      chain.unshift(cur);
+      cur = cur.parentId ? tree.byId.get(cur.parentId) : undefined;
     }
-    // Sort groups by total spend
-    return Array.from(groups.entries())
-      .map(([group, cats]) => ({
-        group,
-        categories: cats,
-        total: cats.reduce((s, c) => s + c.total, 0),
-      }))
-      .sort((a, b) => b.total - a.total);
-  }, [categoryData]);
+    return chain;
+  }, [node, tree]);
 
-  // Compute stats for the active selection
-  const selectionStats = useMemo(() => {
-    if (isAll) {
-      return {
-        label: "All Categories",
-        total: totalSpend,
-        count: transactions.length,
-        avgPerTransaction: transactions.length > 0 ? totalSpend / transactions.length : 0,
-        shareOfTotal: 100,
-        groupLabel: "All Groups",
-      };
-    }
-    if (isGroup && activeGroupName) {
-      const groupInfo = groupData.find((g) => g.name === activeGroupName);
-      const groupTxns = transactions.filter((t) => t.group === activeGroupName);
-      const total = groupTxns.reduce((s, t) => s + t.amount, 0);
-      return {
-        label: activeGroupName,
-        total,
-        count: groupTxns.length,
-        avgPerTransaction: groupTxns.length > 0 ? total / groupTxns.length : 0,
-        shareOfTotal: totalSpend > 0 ? (total / totalSpend) * 100 : 0,
-        groupLabel: `${groupInfo?.categories.length || 0} categories`,
-      };
-    }
-    // Single category
-    const cat = categoryData.find((c) => c.name === activeCategoryName);
-    if (cat) {
-      return {
-        label: cat.name,
-        total: cat.total,
-        count: cat.count,
-        avgPerTransaction: cat.avgPerTransaction,
-        shareOfTotal: totalSpend > 0 ? (cat.total / totalSpend) * 100 : 0,
-        groupLabel: `Group: ${cat.group}`,
-      };
-    }
-    return { label: "—", total: 0, count: 0, avgPerTransaction: 0, shareOfTotal: 0, groupLabel: "" };
-  }, [isAll, isGroup, activeGroupName, activeCategoryName, categoryData, groupData, transactions, totalSpend]);
-
-  // Filter transactions based on selection
   const selectionTransactions = useMemo(() => {
-    if (isAll) return transactions;
-    if (isGroup && activeGroupName) return transactions.filter((t) => t.group === activeGroupName);
-    return transactions.filter((t) => t.category === activeCategoryName);
-  }, [transactions, isAll, isGroup, activeGroupName, activeCategoryName]);
+    if (!selection) return transactions;
+    const subtree = tree.subtreeIds(selection);
+    return transactions.filter((t) => subtree.has(t.categoryId));
+  }, [transactions, selection, tree]);
+
+  const grandTotal = useMemo(
+    () => transactions.reduce((s, t) => s + t.amount, 0),
+    [transactions]
+  );
+
+  const selectionStats = useMemo(() => {
+    const total = selectionTransactions.reduce((s, t) => s + t.amount, 0);
+    const count = selectionTransactions.length;
+    return {
+      label: node?.name ?? "All Categories",
+      total,
+      count,
+      avgPerTransaction: count > 0 ? total / count : 0,
+      shareOfTotal: grandTotal > 0 ? (total / grandTotal) * 100 : 0,
+    };
+  }, [selectionTransactions, node, grandTotal]);
+
+  /**
+   * Breakdown rows: the current node's children with activity, plus a
+   * "(general)" row when transactions are filed directly on the node itself.
+   */
+  const breakdownRows = useMemo(() => {
+    const children = tree.children.get(selection || null) ?? [];
+    const rows = children
+      .map((c) => {
+        const s = nodeStats.get(c.id);
+        return s && s.count > 0
+          ? { id: c.id, name: c.name, oneOff: !!c.oneOff, total: s.total, count: s.count, drillable: true }
+          : null;
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+    if (selection) {
+      const s = nodeStats.get(selection);
+      if (s && s.directCount > 0 && rows.length > 0) {
+        rows.push({
+          id: selection,
+          name: `${node?.name ?? ""} (general)`,
+          oneOff: false,
+          total: s.direct,
+          count: s.directCount,
+          drillable: false,
+        });
+      }
+    }
+    return rows.sort((a, b) => b.total - a.total);
+  }, [tree, selection, nodeStats, node]);
 
   const filteredTransactions = useMemo(() => {
     let filtered = selectionTransactions;
@@ -145,7 +124,7 @@ export default function Categories() {
         (t) =>
           t.description.toLowerCase().includes(lower) ||
           t.notes.toLowerCase().includes(lower) ||
-          t.category.toLowerCase().includes(lower)
+          t.path.toLowerCase().includes(lower)
       );
     }
     return [...filtered].sort((a, b) => {
@@ -158,25 +137,26 @@ export default function Categories() {
     });
   }, [selectionTransactions, searchTerm, sortField, sortDir]);
 
-  // Monthly trend for the selection
+  // Monthly trend for the selection (rolled up over the subtree)
   const monthlyTrend = useMemo(() => {
-    if (isAll) {
-      return monthlyData.map((m) => ({
-        name: m.label,
-        total: Math.round(m.total),
-      }));
+    const map = new Map<string, { key: string; label: string; total: number }>();
+    const multiYear = new Set(selectionTransactions.map((t) => t.date.getFullYear())).size > 1;
+    for (const t of selectionTransactions) {
+      const key = `${t.date.getFullYear()}-${String(t.date.getMonth() + 1).padStart(2, "0")}`;
+      if (!map.has(key)) {
+        const base = t.date.toLocaleString("en-AU", { month: "short" });
+        map.set(key, {
+          key,
+          label: multiYear ? `${base} ${String(t.date.getFullYear()).slice(2)}` : base,
+          total: 0,
+        });
+      }
+      map.get(key)!.total += t.amount;
     }
-    if (isGroup && activeGroupName) {
-      return monthlyData.map((m) => ({
-        name: m.label,
-        total: Math.round(m.groups[activeGroupName] || 0),
-      }));
-    }
-    return monthlyData.map((m) => ({
-      name: m.label,
-      total: Math.round(m.categories[activeCategoryName!] || 0),
-    }));
-  }, [monthlyData, isAll, isGroup, activeGroupName, activeCategoryName]);
+    return Array.from(map.values())
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map((m) => ({ name: m.label, total: Math.round(m.total) }));
+  }, [selectionTransactions]);
 
   // Top merchants for the selection ("full" keeps the untruncated key for search links)
   const topMerchants = useMemo(() => {
@@ -218,8 +198,7 @@ export default function Categories() {
     }
   };
 
-  // Title for charts
-  const chartTitle = isAll ? "All Categories" : isGroup ? activeGroupName! : activeCategoryName!;
+  const chartTitle = node?.name ?? "All Categories";
 
   if (loading) return <LoadingState />;
 
@@ -236,32 +215,51 @@ export default function Categories() {
         <div className="absolute inset-0 bg-gradient-to-r from-[#2d3436]/80 via-[#2d3436]/50 to-transparent" />
         <div className="relative z-10 h-full flex flex-col justify-center px-6 lg:px-10">
           <h2 className="text-2xl lg:text-3xl font-bold text-white tracking-tight">
-            Category Deep Dive
+            Category Drill-Down
           </h2>
           <p className="text-white/70 text-sm mt-2">
-            Explore spending patterns by category or group
+            Click into any category to see how it breaks down
           </p>
         </div>
       </motion.div>
 
-      {/* Category Selector with optgroups */}
+      {/* Breadcrumb + quick jump */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.1 }}
       >
-        <div className="bg-card rounded-xl border border-border p-4">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider block">
-              Select Category or Group
-            </label>
+        <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <nav className="flex flex-wrap items-center gap-1 text-sm font-medium">
+              <button
+                onClick={() => setSelection("")}
+                className={selection ? "text-primary hover:underline" : "text-foreground"}
+              >
+                All Categories
+              </button>
+              {breadcrumb.map((n, i) => (
+                <span key={n.id} className="flex items-center gap-1">
+                  <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+                  <button
+                    onClick={() => setSelection(n.id)}
+                    className={
+                      i === breadcrumb.length - 1
+                        ? "text-foreground"
+                        : "text-primary hover:underline"
+                    }
+                  >
+                    {n.name}
+                    {n.oneOff ? " ◈" : ""}
+                  </button>
+                </span>
+              ))}
+            </nav>
             <div className="flex items-center gap-4">
               <button
-                onClick={() => {
-                  if (activeCategoryName) navigate(`/transactions?category=${encodeURIComponent(activeCategoryName)}`);
-                  else if (activeGroupName) navigate(`/transactions?group=${encodeURIComponent(activeGroupName)}`);
-                  else navigate("/transactions");
-                }}
+                onClick={() =>
+                  navigate(selection ? `/transactions?category=${encodeURIComponent(selection)}` : "/transactions")
+                }
                 className="flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
                 title="Open this selection in the Transactions list for filtering and bulk edits"
               >
@@ -278,33 +276,28 @@ export default function Categories() {
             </div>
           </div>
           <select
-            value={activeSelection}
+            value={selection}
             onChange={(e) => {
               setSelection(e.target.value);
               setSearchTerm("");
             }}
             className="w-full bg-background border border-border rounded-lg px-3 py-2.5 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+            title="Jump to any category"
           >
-            {/* All option */}
-            <option value="all">
-              All Categories — {formatCurrency(totalSpend)} ({transactions.length} transactions)
+            <option value="">
+              All Categories — {formatCurrency(grandTotal)} ({transactions.length} transactions)
             </option>
-
-            {/* Groups and their categories */}
-            {groupedCategories.map((g) => (
-              <optgroup key={g.group} label={`── ${g.group} ──`}>
-                {/* Group-level option */}
-                <option value={`group:${g.group}`}>
-                  ★ All {g.group} — {formatCurrency(g.total)}
+            {tree.nodes.map((n) => {
+              const s = nodeStats.get(n.id);
+              return (
+                <option key={n.id} value={n.id}>
+                  {" ".repeat(tree.depthOf(n.id))}
+                  {n.name}
+                  {n.oneOff ? " ◈" : ""}
+                  {s && s.count > 0 ? ` — ${formatCurrency(s.total)} (${s.count})` : ""}
                 </option>
-                {/* Individual categories in this group */}
-                {g.categories.map((c) => (
-                  <option key={c.name} value={c.name}>
-                    {c.name} — {formatCurrency(c.total)} ({c.count} txns)
-                  </option>
-                ))}
-              </optgroup>
-            ))}
+              );
+            })}
           </select>
         </div>
       </motion.div>
@@ -317,9 +310,9 @@ export default function Categories() {
         className="grid grid-cols-2 lg:grid-cols-4 gap-4"
       >
         <StatCard
-          label={isAll ? "Total Spend" : isGroup ? "Group Total" : "Category Total"}
+          label={selection ? "Total (incl. subcategories)" : "Total Spend"}
           value={formatCurrency(selectionStats.total)}
-          icon={isGroup ? <Layers className="w-4 h-4" /> : <Tags className="w-4 h-4" />}
+          icon={<Tags className="w-4 h-4" />}
         />
         <StatCard
           label="Transactions"
@@ -334,7 +327,7 @@ export default function Categories() {
         <StatCard
           label="Share of Total"
           value={formatPercent(selectionStats.shareOfTotal)}
-          subtitle={selectionStats.groupLabel}
+          subtitle={node ? tree.pathOf(node.id) : "All spending"}
         />
       </motion.div>
 
@@ -346,7 +339,7 @@ export default function Categories() {
           transition={{ duration: 0.5, delay: 0.2 }}
           className="lg:col-span-2"
         >
-          <ChartCard title={`${chartTitle} — Monthly Trend`} subtitle="Spend per month">
+          <ChartCard title={`${chartTitle} — Monthly Trend`} subtitle="Spend per month, subcategories included">
             <div className="h-[280px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={monthlyTrend} barCategoryGap="20%">
@@ -364,7 +357,12 @@ export default function Categories() {
                     tickFormatter={(v) => `$${v.toLocaleString()}`}
                   />
                   <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="total" name="Spend" fill="#4a7c8a" radius={[4, 4, 0, 0]} />
+                  <Bar
+                    dataKey="total"
+                    name="Spend"
+                    fill={selection ? colorOf(selection) : "#4a7c8a"}
+                    radius={[4, 4, 0, 0]}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -415,16 +413,16 @@ export default function Categories() {
         </motion.div>
       </div>
 
-      {/* Category breakdown table — only shown for "All" or group views */}
-      {(isAll || isGroup) && (
+      {/* Breakdown of the current node's children */}
+      {breakdownRows.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.35 }}
         >
           <ChartCard
-            title={`Category Breakdown${isGroup ? ` — ${activeGroupName}` : ""}`}
-            subtitle="Click a category to drill down"
+            title={`Breakdown — ${chartTitle}`}
+            subtitle='Click a row to drill down. "(general)" is spend filed directly on this category.'
           >
             <div className="overflow-x-auto -mx-5">
               <table className="w-full text-sm">
@@ -448,52 +446,55 @@ export default function Categories() {
                   </tr>
                 </thead>
                 <tbody>
-                  {categoryData
-                    .filter((c) => isAll || c.group === activeGroupName)
-                    .map((c, i) => {
-                      const pct = selectionStats.total > 0 ? (c.total / selectionStats.total) * 100 : 0;
-                      return (
-                        <tr
-                          key={c.name}
-                          className="border-b border-border/50 hover:bg-accent/50 transition-colors cursor-pointer group"
-                          onClick={() => setSelection(c.name)}
-                        >
-                          <td className="px-5 py-2.5 text-xs font-medium text-foreground">
-                            <div className="flex items-center gap-2">
-                              <div
-                                className="w-2.5 h-2.5 rounded-full shrink-0"
-                                style={{ backgroundColor: CHART_HEX_COLORS[i % CHART_HEX_COLORS.length] }}
-                              />
-                              <span className="group-hover:text-primary transition-colors">{c.name}</span>
-                              {!isGroup && (
-                                <span className="text-[10px] text-muted-foreground hidden sm:inline">({c.group})</span>
-                              )}
+                  {breakdownRows.map((r) => {
+                    const pct = selectionStats.total !== 0 ? (r.total / selectionStats.total) * 100 : 0;
+                    const color = r.drillable ? colorOf(r.id) : "var(--color-muted-foreground)";
+                    return (
+                      <tr
+                        key={`${r.id}-${r.drillable}`}
+                        className={`border-b border-border/50 transition-colors group ${
+                          r.drillable ? "hover:bg-accent/50 cursor-pointer" : "opacity-80"
+                        }`}
+                        onClick={() => r.drillable && setSelection(r.id)}
+                      >
+                        <td className="px-5 py-2.5 text-xs font-medium text-foreground">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: color }}
+                            />
+                            <span className={r.drillable ? "group-hover:text-primary transition-colors" : "text-muted-foreground"}>
+                              {r.name}
+                              {r.oneOff ? " ◈" : ""}
+                            </span>
+                            {r.drillable && (
                               <span className="text-primary/0 group-hover:text-primary/60 transition-colors text-[10px]">→</span>
-                            </div>
-                          </td>
-                          <td className="px-5 py-2.5 text-xs font-medium text-right tabular-nums">
-                            {formatCurrency(c.total)}
-                          </td>
-                          <td className="px-5 py-2.5 text-xs text-muted-foreground text-right tabular-nums hidden sm:table-cell">
-                            {c.count}
-                          </td>
-                          <td className="px-5 py-2.5 text-xs text-muted-foreground text-right tabular-nums">
-                            {formatPercent(pct)}
-                          </td>
-                          <td className="px-5 py-2.5 hidden lg:table-cell">
-                            <div className="w-full bg-secondary rounded-full h-2">
-                              <div
-                                className="h-2 rounded-full transition-all duration-500"
-                                style={{
-                                  width: `${Math.min(pct * (isAll ? 5 : 2), 100)}%`,
-                                  backgroundColor: CHART_HEX_COLORS[i % CHART_HEX_COLORS.length],
-                                }}
-                              />
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-5 py-2.5 text-xs font-medium text-right tabular-nums">
+                          {formatCurrency(r.total)}
+                        </td>
+                        <td className="px-5 py-2.5 text-xs text-muted-foreground text-right tabular-nums hidden sm:table-cell">
+                          {r.count}
+                        </td>
+                        <td className="px-5 py-2.5 text-xs text-muted-foreground text-right tabular-nums">
+                          {formatPercent(pct)}
+                        </td>
+                        <td className="px-5 py-2.5 hidden lg:table-cell">
+                          <div className="w-full bg-secondary rounded-full h-2">
+                            <div
+                              className="h-2 rounded-full transition-all duration-500"
+                              style={{
+                                width: `${Math.min(Math.abs(pct), 100)}%`,
+                                backgroundColor: color,
+                              }}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -505,7 +506,7 @@ export default function Categories() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: isAll || isGroup ? 0.45 : 0.4 }}
+        transition={{ duration: 0.5, delay: 0.4 }}
       >
         <ChartCard
           title={`${chartTitle} Transactions`}
@@ -571,11 +572,11 @@ export default function Categories() {
                     </td>
                     <td className="px-5 py-1.5 text-xs hidden md:table-cell">
                       <CategoryPicker
-                        value={t.category}
-                        onChange={(cat) => {
-                          if (cat === t.category) return;
-                          updateTransactions([t.id], { category: cat });
-                          toast.success(`Moved to ${cat}`);
+                        value={t.categoryId}
+                        onChange={(categoryId) => {
+                          if (categoryId === t.categoryId) return;
+                          updateTransactions([t.id], { categoryId });
+                          toast.success(`Moved to ${nameOf(categoryId)}`);
                         }}
                         className="!text-xs !py-1 !px-2 max-w-[180px]"
                       />

@@ -7,7 +7,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { Transaction } from "@/lib/types";
-import { UNCATEGORIZED } from "@/lib/types";
+import { UNCATEGORIZED_ID } from "@/lib/tree";
 import LoadingState from "@/components/LoadingState";
 import TransactionEditDialog from "@/components/TransactionEditDialog";
 import SplitTransactionDialog from "@/components/SplitTransactionDialog";
@@ -15,7 +15,7 @@ import RuleQuickDialog from "@/components/RuleQuickDialog";
 import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
 import { CategoryPicker } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatDate } from "@/lib/utils";
-import { transactionsToCsv, downloadFile } from "@/lib/export";
+import { transactionsToPortableCsv, downloadFile } from "@/lib/export";
 import { dedupKey } from "@/lib/csv";
 import { normalizeMerchant, suggestPatternsForUncategorised, type RuleChange } from "@/lib/rules";
 import {
@@ -37,15 +37,14 @@ const PAGE_SIZE = 100;
 
 export default function Transactions() {
   const {
-    transactions, allTransactions, loading, categories, groups, accounts, groupColors,
+    transactions, allTransactions, loading, accounts, groupColors, tree, nameOf,
     updateTransactions, deleteTransactions, runRules, rules,
   } = useExpenses();
   const [location] = useLocation();
 
-  // Filters
+  // Filters (category = a node id; matching includes the whole subtree)
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
-  const [group, setGroup] = useState("");
   const [account, setAccount] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -71,16 +70,15 @@ export default function Transactions() {
   const [splitTxn, setSplitTxn] = useState<Transaction | null>(null);
 
   // Rule-from-transaction dialog
-  const [ruleSeed, setRuleSeed] = useState<{ pattern: string; category: string } | null>(null);
+  const [ruleSeed, setRuleSeed] = useState<{ pattern: string; categoryId: string } | null>(null);
 
   // Post-"Apply Rules" review
   const [ruleRunChanges, setRuleRunChanges] = useState<RuleChange[] | null>(null);
 
-  // URL params → filters
+  // URL params → filters (?category= is a node id)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("category")) setCategory(params.get("category")!);
-    if (params.get("group")) setGroup(params.get("group")!);
     if (params.get("q")) setSearch(params.get("q")!);
     if (params.get("uncategorized")) setUncatOnly(true);
     if (params.get("duplicates")) setDupOnly(true);
@@ -109,15 +107,17 @@ export default function Transactions() {
         (t) =>
           t.description.toLowerCase().includes(q) ||
           t.notes.toLowerCase().includes(q) ||
-          t.category.toLowerCase().includes(q)
+          t.path.toLowerCase().includes(q)
       );
     }
-    if (category) list = list.filter((t) => t.category === category);
-    if (group) list = list.filter((t) => t.group === group);
+    if (category) {
+      const subtree = tree.subtreeIds(category);
+      list = list.filter((t) => subtree.has(t.categoryId));
+    }
     if (account) list = list.filter((t) => t.account === account);
     if (dateFrom) list = list.filter((t) => t.dateStr >= dateFrom);
     if (dateTo) list = list.filter((t) => t.dateStr <= dateTo);
-    if (uncatOnly) list = list.filter((t) => t.category === UNCATEGORIZED);
+    if (uncatOnly) list = list.filter((t) => t.categoryId === UNCATEGORIZED_ID);
     if (dupOnly) list = list.filter((t) => duplicateIds.has(t.id));
 
     return [...list].sort((a, b) => {
@@ -130,12 +130,12 @@ export default function Transactions() {
       }
       return sortDir === "desc" ? -cmp : cmp;
     });
-  }, [transactions, search, category, group, account, dateFrom, dateTo, uncatOnly, dupOnly, duplicateIds, sortField, sortDir]);
+  }, [transactions, search, category, tree, account, dateFrom, dateTo, uncatOnly, dupOnly, duplicateIds, sortField, sortDir]);
 
   const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount]);
   const filteredTotal = useMemo(() => filtered.reduce((s, t) => s + t.amount, 0), [filtered]);
   const uncatCount = useMemo(
-    () => transactions.filter((t) => t.category === UNCATEGORIZED).length,
+    () => transactions.filter((t) => t.categoryId === UNCATEGORIZED_ID).length,
     [transactions]
   );
   const dupCount = useMemo(
@@ -149,10 +149,10 @@ export default function Transactions() {
     [transactions, rules]
   );
 
-  const hasFilters = !!(search || category || group || account || dateFrom || dateTo || uncatOnly || dupOnly);
+  const hasFilters = !!(search || category || account || dateFrom || dateTo || uncatOnly || dupOnly);
 
   const clearFilters = () => {
-    setSearch(""); setCategory(""); setGroup(""); setAccount("");
+    setSearch(""); setCategory(""); setAccount("");
     setDateFrom(""); setDateTo(""); setUncatOnly(false); setDupOnly(false);
     setVisibleCount(PAGE_SIZE);
   };
@@ -199,8 +199,8 @@ export default function Transactions() {
       toast.error("Choose a category to apply");
       return;
     }
-    updateTransactions(selectedIds, { category: bulkCategory });
-    toast.success(`Categorised ${selectedIds.length} transaction${selectedIds.length === 1 ? "" : "s"} as ${bulkCategory}`);
+    updateTransactions(selectedIds, { categoryId: bulkCategory });
+    toast.success(`Categorised ${selectedIds.length} transaction${selectedIds.length === 1 ? "" : "s"} as ${nameOf(bulkCategory)}`);
     setBulkCategory("");
     clearSelection();
   };
@@ -213,11 +213,14 @@ export default function Transactions() {
   };
 
   const exportFiltered = () => {
-    const csv = transactionsToCsv(
+    const csv = transactionsToPortableCsv(
       filtered.map((t) => ({
         id: t.id, date: t.dateStr, description: t.description, amount: t.amount,
-        category: t.category, group: t.group, account: t.account, notes: t.notes,
-      }))
+        categoryId: t.categoryId, account: t.account, notes: t.notes,
+        ...(t.originalAmount !== undefined ? { originalAmount: t.originalAmount } : {}),
+        ...(t.fxRate !== undefined ? { fxRate: t.fxRate } : {}),
+      })),
+      tree
     );
     downloadFile(`transactions-${new Date().toISOString().slice(0, 10)}.csv`, csv, "text/csv");
     toast.success(`Exported ${filtered.length} transactions`);
@@ -314,13 +317,13 @@ export default function Transactions() {
               className="w-full pl-8 pr-3 py-2 text-xs bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </div>
-          <select value={category} onChange={(e) => setCategory(e.target.value)} className={selectCls}>
+          <select value={category} onChange={(e) => setCategory(e.target.value)} className={selectCls} title="Includes subcategories">
             <option value="">All categories</option>
-            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <select value={group} onChange={(e) => setGroup(e.target.value)} className={selectCls}>
-            <option value="">All groups</option>
-            {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+            {tree.nodes.map((n) => (
+              <option key={n.id} value={n.id}>
+                {" ".repeat(tree.depthOf(n.id))}{n.name}
+              </option>
+            ))}
           </select>
           {accounts.length > 0 && (
             <select value={account} onChange={(e) => setAccount(e.target.value)} className={selectCls}>
@@ -387,15 +390,15 @@ export default function Transactions() {
             {ruleSuggestions.map((s) => (
               <button
                 key={s.pattern}
-                onClick={() => setRuleSeed({ pattern: s.pattern, category: s.suggestedCategory ?? "" })}
+                onClick={() => setRuleSeed({ pattern: s.pattern, categoryId: s.suggestedCategoryId ?? "" })}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] border border-border hover:bg-accent hover:border-primary/40 transition-colors"
                 title={`Covers ${s.count} uncategorised transaction${s.count === 1 ? "" : "s"} — opens the rule dialog to review the matches`}
               >
                 <Wand2 className="w-3 h-3 text-muted-foreground" />
                 <span className="font-medium">"{s.pattern}"</span>
                 <span className="text-muted-foreground">×{s.count}</span>
-                {s.suggestedCategory && (
-                  <span className="text-primary">→ {s.suggestedCategory}</span>
+                {s.suggestedCategoryId && (
+                  <span className="text-primary">→ {nameOf(s.suggestedCategoryId)}</span>
                 )}
               </button>
             ))}
@@ -490,10 +493,11 @@ export default function Transactions() {
                   <td className="px-3 py-2 text-xs hidden md:table-cell whitespace-nowrap">
                     <span
                       className={cn(
-                        t.category === UNCATEGORIZED
+                        t.categoryId === UNCATEGORIZED_ID
                           ? "text-terracotta font-medium"
                           : "text-foreground"
                       )}
+                      title={t.path}
                     >
                       {t.category}
                     </span>
@@ -521,7 +525,7 @@ export default function Transactions() {
                         onClick={() =>
                           setRuleSeed({
                             pattern: normalizeMerchant(t.description),
-                            category: t.category === UNCATEGORIZED ? "" : t.category,
+                            categoryId: t.categoryId === UNCATEGORIZED_ID ? "" : t.categoryId,
                           })
                         }
                         className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-accent transition-colors"
@@ -657,7 +661,7 @@ export default function Transactions() {
         open={ruleSeed !== null}
         onOpenChange={(o) => !o && setRuleSeed(null)}
         seedPattern={ruleSeed?.pattern ?? ""}
-        seedCategory={ruleSeed?.category ?? ""}
+        seedCategoryId={ruleSeed?.categoryId ?? ""}
       />
 
       <RuleRunReviewDialog

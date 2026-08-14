@@ -4,8 +4,14 @@ export interface Transaction {
   dateStr: string; // ISO "2025-01-15"
   description: string;
   amount: number; // positive = expense, negative = income/refund
+  /** The category node this transaction is filed on (any node, not just leaves) */
+  categoryId: string;
+  /** Display name of the category node (derived at load) */
   category: string;
-  group: string; // always derived from the category's group (strict tree)
+  /** Full path, e.g. "Travel > Mexico 2026 > Flights" (derived at load) */
+  path: string;
+  /** Name of the top-level ancestor node — the chart bucket (derived at load) */
+  group: string;
   account: string; // source account/bank, e.g. "ANZ Visa"
   notes: string;
   /** For foreign-currency imports: the source-currency amount before conversion (audit trail) */
@@ -14,14 +20,13 @@ export interface Transaction {
   fxRate?: number;
 }
 
-/** Serialized form stored in IndexedDB / JSON export */
+/** Serialized form stored in transactions.csv / JSON backups — references the tree by id only */
 export interface StoredTransaction {
   id: string;
   date: string; // ISO "2025-01-15"
   description: string;
   amount: number;
-  category: string;
-  group: string;
+  categoryId: string;
   account: string;
   notes: string;
   originalAmount?: number;
@@ -29,30 +34,22 @@ export interface StoredTransaction {
 }
 
 /**
- * The category tree: every category belongs to exactly one group.
- * Groups exist implicitly as the set of distinct `group` values.
- * A "project" is a group with a Project metadata record attached.
+ * One node of the category tree (categories.csv). Arbitrary depth; transactions
+ * may be filed on any node. A node with `oneOff` set is a "project": a one-off
+ * cost centre (a trip, a renovation…) whose subtree clusters at the end of
+ * pickers and can be excluded from trend analysis. Archiving a node retires its
+ * whole subtree from pickers/suggestions and disables its rules, keeping history.
  */
-export interface CategoryDef {
-  name: string;
-  group: string;
-}
-
-export type ProjectStatus = "active" | "archived";
-
-/**
- * One-off cost centre. `name` IS the group name its categories live under.
- * The active period is implicit from its transactions; archiving retires it
- * from pickers, rules and suggestions while keeping all history.
- */
-export interface Project {
-  id: string;
-  name: string;
-  color: string;
-  status: ProjectStatus;
+export interface CategoryNode {
+  id: string; // stable readable slug, e.g. "travel-mex26"
+  parentId: string | null; // null = top-level (a chart bucket)
+  name: string; // unique among siblings only
+  oneOff?: boolean;
+  archived?: boolean;
+  color?: string; // chart color (top-level and one-off nodes)
   budget?: number;
   notes?: string;
-  createdAt: string;
+  createdAt?: string;
 }
 
 export interface Rule {
@@ -60,7 +57,7 @@ export interface Rule {
   /** Case-insensitive substring matched against transaction description (or regex if isRegex) */
   pattern: string;
   isRegex: boolean;
-  category: string; // group follows from the category
+  categoryId: string;
   enabled: boolean;
   createdAt: string;
 }
@@ -83,8 +80,10 @@ export interface ColumnMapping {
   description: number;
   amount: number; // single amount column, or debit column when credit >= 0
   credit?: number; // separate credit column (optional)
+  /** Column carrying a category name or path (resolved against the tree at import) */
   category?: number;
-  group?: number;
+  /** Column carrying a category node id (this app's own exports) */
+  categoryId?: number;
   account?: number;
   notes?: number;
 }
@@ -101,6 +100,8 @@ export type AmountConvention = "negativeIsExpense" | "positiveIsExpense" | "debi
 
 export interface Settings {
   yearScope: string; // "all", "2025", or "range:2024-06-01:2025-08-13" (see lib/scope)
+  /** Exclude one-off (project) subtrees from the derived analytics */
+  hideOneOffs?: boolean;
 }
 
 export interface MonthlyData {
@@ -108,27 +109,26 @@ export interface MonthlyData {
   label: string; // "Jan" or "Jan 25" when multi-year
   total: number;
   count: number;
+  /** spend per category node id (direct filing, no rollup) */
   categories: Record<string, number>;
+  /** spend per top-level bucket name (full rollup) */
   groups: Record<string, number>;
 }
 
-export interface CategoryData {
+/** Per-node aggregate over the scoped transactions */
+export interface NodeStats {
+  id: string;
   name: string;
+  path: string;
+  depth: number;
+  parentId: string | null;
+  /** spend filed directly on this node */
+  direct: number;
+  directCount: number;
+  /** spend including all descendants */
   total: number;
   count: number;
-  avgPerTransaction: number;
-  group: string;
 }
-
-export interface GroupData {
-  name: string;
-  total: number;
-  count: number;
-  categories: string[];
-}
-
-export const UNCATEGORIZED = "Uncategorized";
-export const DEFAULT_GROUP = "Other";
 
 export const CHART_COLORS = [
   "var(--color-eucalyptus)",
@@ -180,9 +180,8 @@ const KNOWN_GROUP_COLORS: Record<string, string> = {
 };
 
 /**
- * Stable fallback color for a group name — known groups keep their palette,
- * new ones hash into it. Project groups should prefer the project's own color
- * (see `groupColors` on the expense context).
+ * Stable fallback color for a top-level bucket name — known names keep their
+ * palette, new ones hash into it. A node's explicit `color` wins over this.
  */
 export function groupColor(name: string): string {
   if (KNOWN_GROUP_COLORS[name]) return KNOWN_GROUP_COLORS[name];
@@ -192,13 +191,6 @@ export function groupColor(name: string): string {
   }
   return CHART_HEX_COLORS[hash % CHART_HEX_COLORS.length];
 }
-
-/** Kept for backwards compatibility with existing pages */
-export const GROUP_COLORS: Record<string, string> = new Proxy(KNOWN_GROUP_COLORS, {
-  get(target, prop: string) {
-    return target[prop] ?? groupColor(prop);
-  },
-});
 
 export const PROJECT_COLORS = [
   "#c17c5e",

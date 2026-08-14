@@ -8,7 +8,7 @@ import { motion } from "framer-motion";
 
 export default function WorkspaceGate() {
   const {
-    workspaceStatus, workspaceName, workspaceError, legacyCount,
+    workspaceStatus, workspaceName, workspaceError,
     chooseWorkspaceFolder, reconnectWorkspace, disconnectWorkspace,
   } = useExpenses();
 
@@ -41,12 +41,6 @@ export default function WorkspaceGate() {
               reads and writes them. Pick the folder that holds (or will hold){" "}
               <code className="bg-secondary px-1 rounded text-xs">transactions.csv</code>.
             </p>
-            {legacyCount > 0 && (
-              <p className="text-xs text-ocean bg-ocean/10 border border-ocean/30 rounded-lg px-3 py-2 mt-3">
-                Found {legacyCount} transactions from the previous in-browser version — if you pick
-                an empty folder, they'll be saved into it automatically.
-              </p>
-            )}
             <button
               onClick={() => void chooseWorkspaceFolder()}
               className="mt-5 px-5 py-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:opacity-90 inline-flex items-center gap-2"
@@ -56,7 +50,7 @@ export default function WorkspaceGate() {
             </button>
             <p className="text-[11px] text-muted-foreground mt-4 flex items-center justify-center gap-1.5">
               <FileSpreadsheet className="w-3.5 h-3.5" />
-              A new folder gets transactions.csv, categories.csv, projects.csv, rules.csv and a README.
+              A new folder gets transactions.csv, categories.csv, rules.csv and a README.
             </p>
           </>
         )}

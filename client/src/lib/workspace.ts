@@ -2,22 +2,19 @@
   File-workspace persistence via the File System Access API.
   The user points the app at a folder; that folder's CSV files are the
   source of truth:
-    transactions.csv       ID,Date,Description,Amount,Category,Group,Account,Notes
-    categories.csv         Category,Group           (the strict tree)
-    projects.csv           Name,Color,Status,Budget,StartDate,EndDate,Notes,CreatedAt
-    rules.csv              Pattern,IsRegex,Category,Enabled,CreatedAt
+    transactions.csv       ID,Date,Description,Amount,CategoryId,Account,Notes,OriginalAmount,FxRate
+    categories.csv         Id,ParentId,Name,Path,OneOff,Archived,Color,Budget,Notes,CreatedAt
+    rules.csv              Pattern,IsRegex,CategoryId,Enabled,CreatedAt
     import-profiles.json   app-managed bank column mappings
+  The category tree is an adjacency list (Id/ParentId); Path is a derived
+  convenience column the app rewrites — structure lives in ParentId only, so
+  tree edits never touch transactions.csv.
   The app writes files immediately on every mutation and re-reads any file
   whose mtime changed externally (AI agents / Excel edit them directly).
 */
 import Papa from "papaparse";
-import type {
-  StoredTransaction,
-  CategoryDef,
-  Project,
-  Rule,
-  ImportProfile,
-} from "./types";
+import type { StoredTransaction, CategoryNode, Rule, ImportProfile } from "./types";
+import { buildTree } from "./tree";
 import { csvToTransactions } from "./export";
 import { dbGet, dbSet, dbDel, uid } from "./db";
 
@@ -26,7 +23,6 @@ export const WS_HANDLE_KEY = "workspaceHandle";
 export const WS_FILES = {
   transactions: "transactions.csv",
   categories: "categories.csv",
-  projects: "projects.csv",
   rules: "rules.csv",
   profiles: "import-profiles.json",
 } as const;
@@ -72,74 +68,57 @@ export async function requestPermission(handle: FileSystemDirectoryHandle): Prom
 
 /* ---------- Per-table serialization ---------- */
 
-export function categoriesToCsv(defs: CategoryDef[]): string {
-  const rows = [...defs]
-    .sort((a, b) => a.group.localeCompare(b.group) || a.name.localeCompare(b.name))
-    .map((d) => ({ Category: d.name, Group: d.group }));
-  return (
-    Papa.unparse(
-      { fields: ["Category", "Group"], data: rows.map((r) => [r.Category, r.Group]) },
-      { newline: "\n" }
-    ) + "\n"
-  );
+const NODE_FIELDS = ["Id", "ParentId", "Name", "Path", "OneOff", "Archived", "Color", "Budget", "Notes", "CreatedAt"];
+
+/**
+ * Serialize the tree depth-first (reads like an indented outline) with the
+ * derived Path column filled in for humans and spreadsheet clients.
+ */
+export function nodesToCsv(nodes: CategoryNode[]): string {
+  const tree = buildTree(nodes);
+  const rows = tree.nodes.map((n) => [
+    n.id,
+    n.parentId ?? "",
+    n.name,
+    tree.pathOf(n.id),
+    n.oneOff ? "true" : "",
+    n.archived ? "true" : "",
+    n.color ?? "",
+    n.budget != null ? String(n.budget) : "",
+    n.notes ?? "",
+    n.createdAt ?? "",
+  ]);
+  return Papa.unparse({ fields: NODE_FIELDS, data: rows }, { newline: "\n" }) + "\n";
 }
 
-export function csvToCategories(text: string): CategoryDef[] {
+export function csvToNodes(text: string): CategoryNode[] {
   const result = Papa.parse<Record<string, string>>(text.trim(), { header: true, skipEmptyLines: true });
   return result.data
-    .filter((r) => r.Category)
-    .map((r) => ({ name: r.Category, group: r.Group || "Other" }));
-}
-
-export function projectsToCsv(projects: Project[]): string {
-  const rows = projects.map((p) => ({
-    Name: p.name,
-    Color: p.color,
-    Status: p.status,
-    Budget: p.budget != null ? String(p.budget) : "",
-    Notes: p.notes ?? "",
-    CreatedAt: p.createdAt,
-  }));
-  return (
-    Papa.unparse(
-      {
-        fields: ["Name", "Color", "Status", "Budget", "Notes", "CreatedAt"],
-        data: rows.map((r) => [r.Name, r.Color, r.Status, r.Budget, r.Notes, r.CreatedAt]),
-      },
-      { newline: "\n" }
-    ) + "\n"
-  );
-}
-
-export function csvToProjects(text: string): Project[] {
-  const result = Papa.parse<Record<string, string>>(text.trim(), { header: true, skipEmptyLines: true });
-  return result.data
-    .filter((r) => r.Name)
+    .filter((r) => r.Id && r.Name)
     .map((r) => ({
-      id: uid(),
+      id: r.Id,
+      parentId: r.ParentId ? r.ParentId : null,
       name: r.Name,
-      color: r.Color || "#c17c5e",
-      status: r.Status === "archived" ? "archived" as const : "active" as const,
-      budget: r.Budget ? parseFloat(r.Budget) || undefined : undefined,
-      notes: r.Notes || undefined,
-      createdAt: r.CreatedAt || new Date().toISOString(),
+      ...(r.OneOff === "true" ? { oneOff: true } : {}),
+      ...(r.Archived === "true" ? { archived: true } : {}),
+      ...(r.Color ? { color: r.Color } : {}),
+      ...(r.Budget && !isNaN(parseFloat(r.Budget)) ? { budget: parseFloat(r.Budget) } : {}),
+      ...(r.Notes ? { notes: r.Notes } : {}),
+      ...(r.CreatedAt ? { createdAt: r.CreatedAt } : {}),
     }));
 }
 
 export function rulesToCsv(rules: Rule[]): string {
-  const rows = rules.map((r) => ({
-    Pattern: r.pattern,
-    IsRegex: r.isRegex ? "true" : "false",
-    Category: r.category,
-    Enabled: r.enabled ? "true" : "false",
-    CreatedAt: r.createdAt,
-  }));
+  const rows = rules.map((r) => [
+    r.pattern,
+    r.isRegex ? "true" : "false",
+    r.categoryId,
+    r.enabled ? "true" : "false",
+    r.createdAt,
+  ]);
   return (
     Papa.unparse(
-      {
-        fields: ["Pattern", "IsRegex", "Category", "Enabled", "CreatedAt"],
-        data: rows.map((r) => [r.Pattern, r.IsRegex, r.Category, r.Enabled, r.CreatedAt]),
-      },
+      { fields: ["Pattern", "IsRegex", "CategoryId", "Enabled", "CreatedAt"], data: rows },
       { newline: "\n" }
     ) + "\n"
   );
@@ -148,12 +127,12 @@ export function rulesToCsv(rules: Rule[]): string {
 export function csvToRules(text: string): Rule[] {
   const result = Papa.parse<Record<string, string>>(text.trim(), { header: true, skipEmptyLines: true });
   return result.data
-    .filter((r) => r.Pattern && r.Category)
+    .filter((r) => r.Pattern && r.CategoryId)
     .map((r) => ({
       id: uid(),
       pattern: r.Pattern,
       isRegex: r.IsRegex === "true",
-      category: r.Category,
+      categoryId: r.CategoryId,
       enabled: r.Enabled !== "false",
       createdAt: r.CreatedAt || new Date().toISOString(),
     }));
@@ -224,8 +203,7 @@ export async function getWorkspaceFileMtime(
 
 export interface WorkspaceData {
   transactions: StoredTransaction[];
-  categories: CategoryDef[];
-  projects: Project[];
+  nodes: CategoryNode[];
   rules: Rule[];
   importProfiles: ImportProfile[];
   hasTransactionsFile: boolean;
@@ -244,13 +222,11 @@ export async function readWorkspace(
 
   const txnFile = await readFileIfExists(dir, WS_FILES.transactions);
   const catFile = await readFileIfExists(dir, WS_FILES.categories);
-  const projFile = await readFileIfExists(dir, WS_FILES.projects);
   const ruleFile = await readFileIfExists(dir, WS_FILES.rules);
   const profFile = await readFileIfExists(dir, WS_FILES.profiles);
 
   if (txnFile) mtimes[WS_FILES.transactions] = txnFile.mtime;
   if (catFile) mtimes[WS_FILES.categories] = catFile.mtime;
-  if (projFile) mtimes[WS_FILES.projects] = projFile.mtime;
   if (ruleFile) mtimes[WS_FILES.rules] = ruleFile.mtime;
   if (profFile) mtimes[WS_FILES.profiles] = profFile.mtime;
 
@@ -269,8 +245,7 @@ export async function readWorkspace(
   return {
     data: {
       transactions: parsedTxns ?? [],
-      categories: catFile ? csvToCategories(catFile.text) : [],
-      projects: projFile ? csvToProjects(projFile.text) : [],
+      nodes: catFile ? csvToNodes(catFile.text) : [],
       rules: ruleFile ? csvToRules(ruleFile.text) : [],
       importProfiles,
       hasTransactionsFile: !!txnFile,
@@ -292,52 +267,63 @@ disk" on its Data page).
 
 ## Files
 
+### categories.csv — the category tree
+\`\`\`
+Id,ParentId,Name,Path,OneOff,Archived,Color,Budget,Notes,CreatedAt
+\`\`\`
+One row per node; arbitrary nesting via \`ParentId\` (empty = top-level).
+Transactions may be filed on **any** node, not just leaves — reports roll
+descendants up into ancestors.
+- \`Id\` — stable readable slug (e.g. \`travel-mex26\`). **Never change it**;
+  transactions and rules reference it. For new nodes, any unique slug.
+- \`ParentId\` — the parent node's Id, empty for a top-level node (a chart bucket).
+- \`Name\` — display name; unique among siblings only. Must not contain \`>\`.
+- \`Path\` — **derived** (e.g. \`Travel > Mexico 2026 > Flights\`). The app
+  rewrites it from ParentId/Name; feel free to leave it blank when adding rows.
+  Structure lives in ParentId — editing Path alone changes nothing.
+- \`OneOff\` — \`true\` marks a one-off cost centre ("project": a trip, a
+  renovation…). Its subtree clusters at the end of pickers and can be excluded
+  from trend charts.
+- \`Archived\` — \`true\` retires the node's whole subtree: hidden from pickers
+  and suggestions, its rules disabled, all history kept. **Do not categorise
+  new spending into an archived subtree.**
+- \`Color\` — chart color (used for top-level and one-off nodes), \`Budget\`,
+  \`Notes\`, \`CreatedAt\` — optional metadata.
+The top-level node \`uncategorized\` ("Uncategorized") is special: rows needing
+triage are filed there, and the app re-creates it if it's missing.
+
 ### transactions.csv — every transaction
 \`\`\`
-ID,Date,Description,Amount,Category,Group,Account,Notes,OriginalAmount,FxRate
+ID,Date,Description,Amount,CategoryId,Account,Notes,OriginalAmount,FxRate
 \`\`\`
-- \`ID\` — stable unique row id. **Never change it**; the app uses it to track rows. For new rows, use any unique string.
+- \`ID\` — stable unique row id. **Never change it**. For new rows, use any unique string.
 - \`Date\` — ISO \`yyyy-mm-dd\`
 - \`Amount\` — plain number, 2 decimals, **always AUD**. **Positive = expense, negative = income/refund.**
-- \`Category\` — the fine-grained label. \`Uncategorized\` marks rows needing triage.
-- \`Group\` — the pie-chart bucket. Informational for known categories (categories.csv is authoritative); for a category not yet in categories.csv, this value places it in the tree.
+- \`CategoryId\` — the Id of a categories.csv node (any level). Use
+  \`uncategorized\` for rows needing triage. To categorise into a new category,
+  first add its row to categories.csv, then reference its Id here. An unknown
+  CategoryId is auto-registered as a top-level node named after the id — fix it
+  in categories.csv if that happens.
 - \`Account\` — optional source account label (e.g. "ANZ Visa")
 - \`Notes\` — optional free text
 - \`OriginalAmount\`, \`FxRate\` — only set for foreign-currency imports: the source-currency
   amount and the rate used, so \`Amount ≈ OriginalAmount × FxRate\` (audit trail; both blank
   for native-AUD rows). Duplicate detection matches on \`OriginalAmount\` when present.
 
-### categories.csv — the category tree
-\`\`\`
-Category,Group
-\`\`\`
-Every category belongs to exactly **one** group. This file is authoritative:
-the app rewrites each transaction's Group to match it.
-
-### projects.csv — one-off cost centres (a trip, a renovation…)
-\`\`\`
-Name,Color,Status,Budget,Notes,CreatedAt
-\`\`\`
-A project **is a group**: \`Name\` must match a Group value, and the project's
-categories are the rows in categories.csv with that Group. \`Status\` is
-\`active\` or \`archived\`. Archived projects keep all history but are retired:
-**do not categorise new spending into an archived project's categories.**
-
 ### rules.csv — auto-categorisation rules
 \`\`\`
-Pattern,IsRegex,Category,Enabled,CreatedAt
+Pattern,IsRegex,CategoryId,Enabled,CreatedAt
 \`\`\`
 "Description contains Pattern (case-insensitive; regex if IsRegex) → assign
-Category." First matching rule wins.
+the node CategoryId." First matching rule wins.
 
 ### import-profiles.json — saved bank CSV column mappings (app-managed)
 `;
 
-/** Write README.md into the workspace if it doesn't exist yet */
+/** Write README.md into the workspace, replacing any older schema description */
 export async function ensureWorkspaceReadme(dir: FileSystemDirectoryHandle): Promise<void> {
-  try {
-    await dir.getFileHandle("README.md");
-  } catch {
+  const existing = await readFileIfExists(dir, "README.md").catch(() => null);
+  if (!existing || !existing.text.includes("CategoryId")) {
     await writeWorkspaceFile(dir, "README.md", WORKSPACE_README);
   }
 }

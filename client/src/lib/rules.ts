@@ -1,10 +1,9 @@
 /*
   Auto-categorisation rules: match transaction descriptions and assign a
-  category (the group follows from the category tree). Applied on import
-  and on demand.
+  category node. Applied on import and on demand.
 */
 import type { Rule, StoredTransaction } from "./types";
-import { UNCATEGORIZED } from "./types";
+import { UNCATEGORIZED_ID } from "./tree";
 
 export function ruleMatches(rule: Rule, description: string): boolean {
   if (!rule.pattern) return false;
@@ -21,73 +20,74 @@ export function ruleMatches(rule: Rule, description: string): boolean {
 /** One transaction re-categorised by a rule run — enough detail to review and undo it */
 export interface RuleChange {
   id: string;
-  from: string;
-  to: string;
+  fromCategoryId: string;
+  toCategoryId: string;
   pattern: string;
 }
 
 /**
  * Apply rules to transactions. By default only fills in uncategorized
  * transactions; pass overwrite=true to re-categorize everything that matches.
- * `groupOf` resolves a category to its group in the tree.
+ * `isValidCategory` guards against rules pointing at deleted nodes.
  * Returns the modified copies (originals untouched) plus a change log.
  */
 export function applyRules(
   transactions: StoredTransaction[],
   rules: Rule[],
-  groupOf: (category: string) => string,
+  isValidCategory: (categoryId: string) => boolean,
   options: { overwrite?: boolean } = {}
 ): { updated: StoredTransaction[]; count: number; changes: RuleChange[] } {
-  const active = rules.filter((r) => r.enabled && r.category);
+  const active = rules.filter((r) => r.enabled && r.categoryId && isValidCategory(r.categoryId));
   const updated: StoredTransaction[] = [];
   const changes: RuleChange[] = [];
   for (const txn of transactions) {
-    const isUncat = !txn.category || txn.category === UNCATEGORIZED;
+    const isUncat = !txn.categoryId || txn.categoryId === UNCATEGORIZED_ID;
     if (!options.overwrite && !isUncat) continue;
     const rule = active.find((r) => ruleMatches(r, txn.description));
-    if (!rule || rule.category === txn.category) continue;
-    updated.push({
-      ...txn,
-      category: rule.category,
-      group: groupOf(rule.category),
+    if (!rule || rule.categoryId === txn.categoryId) continue;
+    updated.push({ ...txn, categoryId: rule.categoryId });
+    changes.push({
+      id: txn.id,
+      fromCategoryId: txn.categoryId,
+      toCategoryId: rule.categoryId,
+      pattern: rule.pattern,
     });
-    changes.push({ id: txn.id, from: txn.category, to: rule.category, pattern: rule.pattern });
   }
   return { updated, count: updated.length, changes };
 }
 
 /**
  * Learn candidate rules from already-categorized data: recurring merchant
- * substrings that map consistently to one category.
+ * substrings that map consistently to one category node.
  */
 export function suggestRulesFromHistory(
   transactions: StoredTransaction[],
   existingRules: Rule[],
-  /** e.g. categories belonging to archived projects */
-  excludeCategory: (category: string) => boolean = () => false
-): Array<{ pattern: string; category: string; count: number }> {
+  /** e.g. nodes inside archived subtrees */
+  excludeCategory: (categoryId: string) => boolean = () => false
+): Array<{ pattern: string; categoryId: string; count: number }> {
   const byMerchant = new Map<string, { categories: Map<string, number>; count: number }>();
   for (const t of transactions) {
-    if (!t.category || t.category === UNCATEGORIZED) continue;
-    if (excludeCategory(t.category)) continue;
+    if (!t.categoryId || t.categoryId === UNCATEGORIZED_ID) continue;
+    if (excludeCategory(t.categoryId)) continue;
     const key = normalizeMerchant(t.description);
     if (key.length < 4) continue;
     if (!byMerchant.has(key)) {
       byMerchant.set(key, { categories: new Map(), count: 0 });
     }
     const m = byMerchant.get(key)!;
-    m.categories.set(t.category, (m.categories.get(t.category) || 0) + 1);
+    m.categories.set(t.categoryId, (m.categories.get(t.categoryId) || 0) + 1);
     m.count++;
   }
   const existing = new Set(existingRules.map((r) => r.pattern.toLowerCase()));
-  const suggestions: Array<{ pattern: string; category: string; count: number }> = [];
+  const suggestions: Array<{ pattern: string; categoryId: string; count: number }> = [];
   for (const [pattern, m] of byMerchant) {
     if (m.count < 3) continue;
     if (existing.has(pattern.toLowerCase())) continue;
     const [topCategory, topCount] = [...m.categories.entries()].sort((a, b) => b[1] - a[1])[0];
     // Only suggest if the merchant maps to one category at least 90% of the time
     if (topCount / m.count < 0.9) continue;
-    suggestions.push({ pattern, category: topCategory, count: m.count });
+    suggestions.push({ pattern, categoryId: topCategory, count: m.count });
   }
   return suggestions.sort((a, b) => b.count - a.count);
 }
@@ -97,7 +97,7 @@ export interface UncatSuggestion {
   /** Uncategorised transactions this pattern would cover */
   count: number;
   /** Category guess when the same merchant is consistently categorised elsewhere */
-  suggestedCategory?: string;
+  suggestedCategoryId?: string;
 }
 
 /**
@@ -108,14 +108,14 @@ export interface UncatSuggestion {
  * dialog's live match preview is the validation step.
  */
 export function suggestPatternsForUncategorised(
-  transactions: Array<{ id: string; description: string; category: string }>,
+  transactions: Array<{ id: string; description: string; categoryId: string }>,
   rules: Rule[],
   limit = 8
 ): UncatSuggestion[] {
-  const active = rules.filter((r) => r.enabled && r.category);
+  const active = rules.filter((r) => r.enabled && r.categoryId);
   const uncat = transactions.filter(
     (t) =>
-      (!t.category || t.category === UNCATEGORIZED) &&
+      (!t.categoryId || t.categoryId === UNCATEGORIZED_ID) &&
       !active.some((r) => ruleMatches(r, t.description))
   );
   if (uncat.length === 0) return [];
@@ -173,9 +173,9 @@ export function suggestPatternsForUncategorised(
     const cats = new Map<string, number>();
     let total = 0;
     for (const t of transactions) {
-      if (!t.category || t.category === UNCATEGORIZED) continue;
+      if (!t.categoryId || t.categoryId === UNCATEGORIZED_ID) continue;
       if (!t.description.toLowerCase().includes(key)) continue;
-      cats.set(t.category, (cats.get(t.category) || 0) + 1);
+      cats.set(t.categoryId, (cats.get(t.categoryId) || 0) + 1);
       total++;
     }
     const top = [...cats.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -184,13 +184,13 @@ export function suggestPatternsForUncategorised(
 
   return picked.map(({ display, count }) => {
     const tokens = display.toLowerCase().split(" ");
-    let suggestedCategory: string | undefined;
-    for (let i = tokens.length; i >= 1 && !suggestedCategory; i--) {
+    let suggestedCategoryId: string | undefined;
+    for (let i = tokens.length; i >= 1 && !suggestedCategoryId; i--) {
       const prefix = tokens.slice(0, i).join(" ");
       if (prefix.length < 4) break;
-      suggestedCategory = guessCategory(prefix);
+      suggestedCategoryId = guessCategory(prefix);
     }
-    return { pattern: display, count, suggestedCategory };
+    return { pattern: display, count, suggestedCategoryId };
   });
 }
 

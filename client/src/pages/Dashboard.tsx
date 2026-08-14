@@ -18,7 +18,7 @@ import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import { formatCurrency, formatCurrencyExact, formatPercent } from "@/lib/utils";
 import { CHART_HEX_COLORS } from "@/lib/types";
-import { DollarSign, ShoppingCart, TrendingUp, Receipt, UploadCloud, FolderKanban } from "lucide-react";
+import { DollarSign, ShoppingCart, TrendingUp, Receipt, UploadCloud } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
@@ -31,12 +31,27 @@ const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HS
 
 export default function Dashboard() {
   const {
-    transactions, loading, totalSpend, monthlyData, categoryData, groupData,
-    avgMonthlySpend, yearScope, scopeLabel, projects, allTransactions, groupColors,
+    transactions, loading, totalSpend, monthlyData, groupData,
+    avgMonthlySpend, yearScope, scopeLabel, allTransactions, groupColors,
+    nameOf,
   } = useExpenses();
   const [, navigate] = useLocation();
 
-  const topCategory = useMemo(() => categoryData[0], [categoryData]);
+  // Direct per-node totals over the scoped data (respects the one-offs toggle
+  // because monthlyData does)
+  const categoryTotals = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of monthlyData) {
+      for (const [id, v] of Object.entries(m.categories)) {
+        map.set(id, (map.get(id) || 0) + v);
+      }
+    }
+    return Array.from(map.entries())
+      .map(([id, total]) => ({ id, name: nameOf(id), total }))
+      .sort((a, b) => b.total - a.total);
+  }, [monthlyData, nameOf]);
+
+  const topCategory = useMemo(() => categoryTotals[0], [categoryTotals]);
 
   const highestMonth = useMemo(
     () => monthlyData.reduce((max, m) => (m.total > max.total ? m : max), monthlyData[0]),
@@ -55,21 +70,6 @@ export default function Dashboard() {
     const days = Math.max(1, Math.round((last - first) / 86400000) + 1);
     return totalSpend / days;
   }, [totalSpend, transactions]);
-
-  const activeProjects = useMemo(() => {
-    const active = projects.filter((p) => p.status === "active");
-    return active.map((p) => {
-      let total = 0;
-      let count = 0;
-      for (const t of allTransactions) {
-        if (t.group === p.name) {
-          total += t.amount;
-          count++;
-        }
-      }
-      return { ...p, total, count };
-    });
-  }, [projects, allTransactions]);
 
   // With a single year of data, "all time" is just that year — label it as such
   const years = useMemo(() => {
@@ -92,6 +92,7 @@ export default function Dashboard() {
     () => groupData
       .filter((g) => g.total > 0)
       .map((g) => ({
+        id: g.id,
         name: g.name,
         value: Math.round(g.total),
         color: groupColors[g.name] || "#8e8ea0",
@@ -100,13 +101,13 @@ export default function Dashboard() {
   );
 
   const top15Categories = useMemo(
-    () => categoryData.slice(0, 15).map((c, i) => ({
+    () => categoryTotals.slice(0, 15).map((c, i) => ({
+      id: c.id,
       name: c.name,
       total: Math.round(c.total),
-      count: c.count,
       fill: CHART_HEX_COLORS[i % CHART_HEX_COLORS.length],
     })),
-    [categoryData]
+    [categoryTotals]
   );
 
   const cumulativeData = useMemo(() => {
@@ -129,14 +130,14 @@ export default function Dashboard() {
   }, [navigate]);
 
   const handleGroupClick = useCallback((data: any) => {
-    if (data?.name) {
-      navigate(`/categories?group=${encodeURIComponent(data.name)}`);
+    if (data?.id) {
+      navigate(`/categories?category=${encodeURIComponent(data.id)}`);
     }
   }, [navigate]);
 
   const handleCategoryClick = useCallback((data: any) => {
-    if (data?.activePayload?.[0]?.payload?.name) {
-      navigate(`/categories?category=${encodeURIComponent(data.activePayload[0].payload.name)}`);
+    if (data?.activePayload?.[0]?.payload?.id) {
+      navigate(`/categories?category=${encodeURIComponent(data.activePayload[0].payload.id)}`);
     }
   }, [navigate]);
 
@@ -148,7 +149,7 @@ export default function Dashboard() {
 
   const handleTopCategoryClick = useCallback(() => {
     if (topCategory) {
-      navigate(`/categories?category=${encodeURIComponent(topCategory.name)}`);
+      navigate(`/categories?category=${encodeURIComponent(topCategory.id)}`);
     }
   }, [navigate, topCategory]);
 
@@ -213,58 +214,11 @@ export default function Dashboard() {
             {heroLabel} Spending Overview
           </h2>
           <p className="text-white/70 text-sm mt-2 max-w-md">
-            {transactions.length} transactions across {categoryData.length} categories,
+            {transactions.length} transactions across {categoryTotals.length} categories,
             totalling {formatCurrency(totalSpend)}.
           </p>
         </div>
       </motion.div>
-
-      {/* Active projects snapshot */}
-      {activeProjects.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.05 }}
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
-        >
-          {activeProjects.slice(0, 4).map((p) => {
-            const over = p.budget ? p.total > p.budget : false;
-            return (
-              <div
-                key={p.id}
-                onClick={() => navigate(`/projects?project=${p.id}`)}
-                className="bg-card rounded-xl border border-border p-4 cursor-pointer hover:border-primary/30 hover:shadow-sm transition-all"
-              >
-                <div className="flex items-center gap-2 mb-1.5 min-w-0">
-                  <FolderKanban className="w-3.5 h-3.5 shrink-0" style={{ color: p.color }} />
-                  <span className="text-xs font-semibold truncate">{p.name}</span>
-                </div>
-                <div className="text-lg font-semibold tabular-nums">{formatCurrency(p.total)}</div>
-                {p.budget ? (
-                  <div className="mt-2">
-                    <div className="w-full bg-secondary rounded-full h-1.5">
-                      <div
-                        className="h-1.5 rounded-full"
-                        style={{
-                          width: `${Math.min((p.total / p.budget) * 100, 100)}%`,
-                          backgroundColor: over ? "#c0392b" : p.color,
-                        }}
-                      />
-                    </div>
-                    <p className={`text-[10px] mt-1 ${over ? "text-destructive font-medium" : "text-muted-foreground"}`}>
-                      {over
-                        ? `${formatCurrency(p.total - p.budget)} over budget`
-                        : `${formatCurrency(p.budget - p.total)} of ${formatCurrency(p.budget)} left`}
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-[10px] text-muted-foreground mt-1">{p.count} transactions</p>
-                )}
-              </div>
-            );
-          })}
-        </motion.div>
-      )}
 
       {/* KPI Cards */}
       <motion.div
@@ -386,9 +340,8 @@ export default function Dashboard() {
                     iconSize={8}
                     wrapperStyle={{ fontSize: "11px", paddingTop: "8px", cursor: "pointer" }}
                     onClick={(e: any) => {
-                      if (e?.value) {
-                        navigate(`/categories?group=${encodeURIComponent(e.value)}`);
-                      }
+                      const g = groupChartData.find((x) => x.name === e?.value);
+                      if (g) navigate(`/categories?category=${encodeURIComponent(g.id)}`);
                     }}
                   />
                 </PieChart>

@@ -26,7 +26,7 @@ import { useLocation } from "wouter";
 const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-monthly-6DPs6bdQN45W6sqfwd4qms.webp";
 
 export default function Monthly() {
-  const { transactions, loading, monthlyData, avgMonthlySpend, categoryData, groupColors } = useExpenses();
+  const { transactions, loading, monthlyData, avgMonthlySpend, groupColors, nameOf } = useExpenses();
   const [selectedMonth, setSelectedMonth] = useState<string>("");
   const [location, navigate] = useLocation();
 
@@ -59,18 +59,19 @@ export default function Monthly() {
     return ((activeMonthData.total - avgMonthlySpend) / avgMonthlySpend) * 100;
   }, [activeMonthData, avgMonthlySpend]);
 
-  // Category breakdown for selected month
+  // Category breakdown for selected month (keys are node ids)
   const categoryBreakdown = useMemo(() => {
     if (!activeMonthData) return [];
     return Object.entries(activeMonthData.categories)
-      .map(([name, total]) => ({
-        name,
+      .map(([id, total]) => ({
+        id,
+        name: nameOf(id),
         total: Math.round(total),
-        count: monthTransactions.filter((t) => t.category === name).length,
+        count: monthTransactions.filter((t) => t.categoryId === id).length,
         pct: (total / activeMonthData.total) * 100,
       }))
       .sort((a, b) => b.total - a.total);
-  }, [activeMonthData, monthTransactions]);
+  }, [activeMonthData, monthTransactions, nameOf]);
 
   // Daily spending for selected month
   const dailySpending = useMemo(() => {
@@ -124,8 +125,8 @@ export default function Monthly() {
     return ((activeMonthData.total - prevMonthData.total) / prevMonthData.total) * 100;
   }, [activeMonthData, prevMonthData]);
 
-  const handleCategoryClick = (categoryName: string) => {
-    navigate(`/categories?category=${encodeURIComponent(categoryName)}`);
+  const handleCategoryClick = (categoryId: string) => {
+    navigate(`/categories?category=${encodeURIComponent(categoryId)}`);
   };
 
   const handleCompositionClick = (data: any) => {
@@ -331,9 +332,9 @@ export default function Monthly() {
               <tbody>
                 {categoryBreakdown.map((c, i) => (
                   <tr
-                    key={c.name}
+                    key={c.id}
                     className="border-b border-border/50 hover:bg-accent/50 transition-colors cursor-pointer group"
-                    onClick={() => handleCategoryClick(c.name)}
+                    onClick={() => handleCategoryClick(c.id)}
                   >
                     <td className="px-5 py-2.5 text-xs font-medium text-foreground">
                       <div className="flex items-center gap-2">

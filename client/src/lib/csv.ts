@@ -12,7 +12,7 @@ import type {
   DateFormat,
   AmountConvention,
 } from "./types";
-import { UNCATEGORIZED, DEFAULT_GROUP } from "./types";
+import { UNCATEGORIZED_ID } from "./tree";
 import { uid } from "./db";
 
 export interface ParsedCsv {
@@ -64,8 +64,8 @@ export function detectMapping(header: string[], rows: string[][]): ColumnMapping
   let description = find("description", "narrative", "details", "merchant", "payee", "transaction details");
   let amount = find("amount", "debit", "value");
   const credit = find("credit");
-  const category = find("category");
-  const group = find("group");
+  const categoryId = find("categoryid");
+  const category = h.findIndex((col) => col !== "categoryid" && (col === "category" || col.includes("category")));
   const account = find("account", "bank");
   const notes = find("notes", "memo", "comment");
 
@@ -101,7 +101,7 @@ export function detectMapping(header: string[], rows: string[][]): ColumnMapping
     amount: amount === -1 ? 2 : amount,
     credit: credit === -1 ? undefined : credit,
     category: category === -1 ? undefined : category,
-    group: group === -1 ? undefined : group,
+    categoryId: categoryId === -1 ? undefined : categoryId,
     account: account === -1 ? undefined : account,
     notes: notes === -1 ? undefined : notes,
   };
@@ -188,6 +188,11 @@ export interface ImportCandidate {
   txn: StoredTransaction;
   duplicate: boolean;
   rowIndex: number;
+  /**
+   * Category name/path from the source file that didn't resolve to an existing
+   * tree node — the import commit offers to create these.
+   */
+  unresolvedCategory?: string;
 }
 
 export interface RowError {
@@ -218,6 +223,10 @@ export function buildCandidates(
   convention: AmountConvention,
   account: string,
   existingKeys: Set<string>,
+  /** Resolve a category name or path from the source file to a tree node id */
+  resolveCategory: (nameOrPath: string) => string | undefined,
+  /** Is this id an existing tree node? (guards CategoryId columns from stale ids) */
+  isValidCategoryId: (id: string) => boolean,
   fxRate?: number
 ): { candidates: ImportCandidate[]; errors: RowError[] } {
   const candidates: ImportCandidate[] = [];
@@ -253,14 +262,28 @@ export function buildCandidates(
     const description = (row[mapping.description] ?? "").trim();
     const convert = fxRate !== undefined && fxRate > 0 && fxRate !== 1;
     const original = Math.round(amount * 100) / 100;
+
+    // Category resolution: explicit CategoryId column wins; otherwise resolve
+    // a category name/path against the tree; otherwise uncategorized.
+    let categoryId = UNCATEGORIZED_ID;
+    let unresolvedCategory: string | undefined;
+    const rawId = mapping.categoryId !== undefined ? row[mapping.categoryId]?.trim() : "";
+    const rawName = mapping.category !== undefined ? row[mapping.category]?.trim() : "";
+    if (rawId && isValidCategoryId(rawId)) {
+      categoryId = rawId;
+    } else if (rawName) {
+      const resolved = resolveCategory(rawName);
+      if (resolved) categoryId = resolved;
+      else unresolvedCategory = rawName;
+    }
+
     const txn: StoredTransaction = {
       id: uid() + rowIndex.toString(36),
       date,
       description,
       amount: convert ? Math.round(original * fxRate * 100) / 100 : original,
       ...(convert ? { originalAmount: original, fxRate } : {}),
-      category: (mapping.category !== undefined && row[mapping.category]?.trim()) || UNCATEGORIZED,
-      group: (mapping.group !== undefined && row[mapping.group]?.trim()) || DEFAULT_GROUP,
+      categoryId,
       account: (mapping.account !== undefined && row[mapping.account]?.trim()) || account,
       notes: (mapping.notes !== undefined && row[mapping.notes]?.trim()) || "",
     };
@@ -268,7 +291,7 @@ export function buildCandidates(
     const key = dedupKey(txn);
     const duplicate = existingKeys.has(key) || seenInFile.has(key);
     seenInFile.add(key);
-    candidates.push({ txn, duplicate, rowIndex });
+    candidates.push({ txn, duplicate, rowIndex, ...(unresolvedCategory ? { unresolvedCategory } : {}) });
   });
 
   return { candidates, errors };

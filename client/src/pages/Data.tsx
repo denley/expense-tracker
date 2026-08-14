@@ -11,11 +11,11 @@ import { useExpenses } from "@/contexts/ExpenseContext";
 import LoadingState from "@/components/LoadingState";
 import { CategoryPicker, inputCls } from "@/components/pickers";
 import {
-  transactionsToCsv, makeBackup, parseBackup, downloadFile,
+  transactionsToPortableCsv, makeBackup, parseBackup, downloadFile,
 } from "@/lib/export";
 import { suggestRulesFromHistory, type RuleChange } from "@/lib/rules";
 import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
-import { UNCATEGORIZED } from "@/lib/types";
+import { UNCATEGORIZED_ID } from "@/lib/tree";
 import {
   Download, DatabaseBackup, Wand2, Plus, Trash2, Bot, FolderOpen, RefreshCw,
   AlertTriangle, Lightbulb, FileJson, FileSpreadsheet, Power, FolderSync,
@@ -30,8 +30,8 @@ import { cn } from "@/lib/utils";
 
 export default function Data() {
   const {
-    loading, storedTransactions, categoryDefs, projects, rules, importProfiles, groupOf,
-    archivedGroups, workspaceName, reloadFromDisk, disconnectWorkspace,
+    loading, storedTransactions, nodes, tree, nameOf, pathOf, rules, importProfiles,
+    workspaceName, reloadFromDisk, disconnectWorkspace,
     replaceAllData, addRule, updateRule, deleteRule, runRules,
   } = useExpenses();
 
@@ -49,26 +49,30 @@ export default function Data() {
 
   const suggestions = useMemo(
     () =>
-      suggestRulesFromHistory(storedTransactions, rules, (cat) =>
-        archivedGroups.has(groupOf(cat))
+      suggestRulesFromHistory(storedTransactions, rules, (id) =>
+        tree.isArchived(id)
       ).slice(0, 8),
-    [storedTransactions, rules, archivedGroups, groupOf]
+    [storedTransactions, rules, tree]
   );
 
   const uncatCount = useMemo(
-    () => storedTransactions.filter((t) => t.category === UNCATEGORIZED).length,
+    () => storedTransactions.filter((t) => t.categoryId === UNCATEGORIZED_ID).length,
     [storedTransactions]
   );
 
   const today = new Date().toISOString().slice(0, 10);
 
   const exportCsv = () => {
-    downloadFile(`expenses-${today}.csv`, transactionsToCsv(storedTransactions), "text/csv");
+    downloadFile(
+      `expenses-${today}.csv`,
+      transactionsToPortableCsv(storedTransactions, tree),
+      "text/csv"
+    );
     toast.success(`Snapshot of ${storedTransactions.length} transactions downloaded`);
   };
 
   const exportJson = () => {
-    const backup = makeBackup(storedTransactions, categoryDefs, projects, rules, importProfiles);
+    const backup = makeBackup(storedTransactions, nodes, rules, importProfiles);
     downloadFile(`expense-backup-${today}.json`, JSON.stringify(backup, null, 2), "application/json");
     toast.success("Backup downloaded");
   };
@@ -95,7 +99,7 @@ export default function Data() {
     addRule({
       pattern: rulePattern.trim(),
       isRegex: false,
-      category: ruleCategory,
+      categoryId: ruleCategory,
       enabled: true,
     });
     setRulePattern(""); setRuleCategory("");
@@ -128,9 +132,8 @@ export default function Data() {
             <div>
               <h3 className="text-sm font-semibold text-foreground">{workspaceName}</h3>
               <p className="text-xs text-muted-foreground">
-                {storedTransactions.length} transactions · {categoryDefs.length} categories ·{" "}
-                {projects.length} projects · {rules.length} rules — in transactions.csv,
-                categories.csv, projects.csv, rules.csv
+                {storedTransactions.length} transactions · {nodes.length} categories ·{" "}
+                {rules.length} rules — in transactions.csv, categories.csv, rules.csv
               </p>
             </div>
           </div>
@@ -170,17 +173,19 @@ export default function Data() {
           documents the full schema for agents; the short version:
         </p>
         <div className="bg-secondary/50 rounded-lg p-3 overflow-x-auto">
-          <pre className="text-[11px] text-muted-foreground leading-relaxed">{`transactions.csv   ID,Date,Description,Amount,Category,Group,Account,Notes
+          <pre className="text-[11px] text-muted-foreground leading-relaxed">{`categories.csv     Id,ParentId,Name,Path,OneOff,Archived,Color,Budget,Notes,CreatedAt
+                   The tree as an adjacency list: ParentId empty = top-level;
+                   arbitrary nesting; names unique among siblings only.
+                   Path is DERIVED — the app rewrites it; structure = ParentId.
+                   OneOff=true marks a project; Archived=true retires a subtree.
+transactions.csv   ID,Date,Description,Amount,CategoryId,Account,Notes
                    - keep ID unchanged; Date ISO yyyy-mm-dd
                    - Amount: positive = expense, negative = income/refund
-                   - "Uncategorized" marks rows needing triage
-categories.csv     Category,Group — the tree; every category has exactly one group.
-                   Authoritative: the app rewrites transaction Groups to match it.
-projects.csv       Name,Color,Status,Budget,Notes,CreatedAt
-                   A project IS a group; Name matches a Group value. Status
-                   "archived" retires it — don't categorise new spending there.
-rules.csv          Pattern,IsRegex,Category,Enabled,CreatedAt — auto-categorisation.
+                   - CategoryId references a categories.csv Id (any level);
+                     "uncategorized" marks rows needing triage
+rules.csv          Pattern,IsRegex,CategoryId,Enabled,CreatedAt — auto-categorisation.
 
+Tree edits only touch categories.csv — transaction history is never rewritten.
 Avoid editing files while actively using the app (writes are last-one-wins).`}</pre>
         </div>
       </motion.div>
@@ -315,7 +320,7 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
                 </button>
                 <span className="text-xs font-medium truncate">"{r.pattern}"</span>
                 <span className="text-xs text-muted-foreground truncate">
-                  → {r.category} ({groupOf(r.category)})
+                  → {pathOf(r.categoryId)}
                 </span>
                 <div className="flex-1" />
                 <button
@@ -347,15 +352,15 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
                     addRule({
                       pattern: s.pattern,
                       isRegex: false,
-                      category: s.category,
+                      categoryId: s.categoryId,
                       enabled: true,
                     });
-                    toast.success(`Rule added: "${s.pattern}" → ${s.category}`);
+                    toast.success(`Rule added: "${s.pattern}" → ${nameOf(s.categoryId)}`);
                   }}
                   className="px-2.5 py-1.5 rounded-full text-[11px] border border-border hover:bg-accent transition-colors"
                   title={`Seen ${s.count} times`}
                 >
-                  "{s.pattern}" → {s.category}
+                  "{s.pattern}" → {nameOf(s.categoryId)}
                 </button>
               ))}
             </div>
@@ -370,7 +375,7 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
             <AlertDialogTitle>Restore this backup?</AlertDialogTitle>
             <AlertDialogDescription>
               Backup from {pendingRestore?.exportedAt ? new Date(pendingRestore.exportedAt).toLocaleString() : "unknown date"} with{" "}
-              {pendingRestore?.transactions.length} transactions, {pendingRestore?.projects.length} projects
+              {pendingRestore?.transactions.length} transactions, {pendingRestore?.nodes.length} categories
               and {pendingRestore?.rules.length} rules. The files in "{workspaceName}" will be
               overwritten with the backup's contents.
             </AlertDialogDescription>

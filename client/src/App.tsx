@@ -13,7 +13,6 @@ import Categories from "./pages/Categories";
 import Monthly from "./pages/Monthly";
 import Trends from "./pages/Trends";
 import Transactions from "./pages/Transactions";
-import Projects from "./pages/Projects";
 import Import from "./pages/Import";
 import Data from "./pages/Data";
 
@@ -26,7 +25,6 @@ function Routes() {
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/transactions" component={Transactions} />
-      <Route path="/projects" component={Projects} />
       <Route path="/categories" component={Categories} />
       <Route path="/monthly" component={Monthly} />
       <Route path="/trends" component={Trends} />

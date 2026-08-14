@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { Transaction } from "@/lib/types";
-import { UNCATEGORIZED } from "@/lib/types";
+import { UNCATEGORIZED_ID } from "@/lib/tree";
 import {
   Dialog,
   DialogContent,
@@ -29,7 +29,7 @@ interface Props {
 
 interface PartDraft {
   amount: string;
-  category: string;
+  categoryId: string;
   notes: string;
 }
 
@@ -42,8 +42,8 @@ export default function SplitTransactionDialog({ open, onOpenChange, transaction
   useEffect(() => {
     if (!open || !transaction) return;
     setParts([
-      { amount: "", category: transaction.category, notes: "" },
-      { amount: "", category: UNCATEGORIZED, notes: "" },
+      { amount: "", categoryId: transaction.categoryId, notes: "" },
+      { amount: "", categoryId: UNCATEGORIZED_ID, notes: "" },
     ]);
   }, [open, transaction]);
 
@@ -61,7 +61,7 @@ export default function SplitTransactionDialog({ open, onOpenChange, transaction
     setParts((prev) => prev.map((p, j) => (j === i ? { ...p, ...patch } : p)));
 
   const addPart = () =>
-    setParts((prev) => [...prev, { amount: "", category: UNCATEGORIZED, notes: "" }]);
+    setParts((prev) => [...prev, { amount: "", categoryId: UNCATEGORIZED_ID, notes: "" }]);
 
   const removePart = (i: number) => setParts((prev) => prev.filter((_, j) => j !== i));
 
@@ -73,7 +73,7 @@ export default function SplitTransactionDialog({ open, onOpenChange, transaction
       return isNaN(c) || c === 0;
     });
     if (idx >= 0) setPart(idx, { amount });
-    else setParts((prev) => [...prev, { amount, category: UNCATEGORIZED, notes: "" }]);
+    else setParts((prev) => [...prev, { amount, categoryId: UNCATEGORIZED_ID, notes: "" }]);
   };
 
   const save = () => {
@@ -91,7 +91,7 @@ export default function SplitTransactionDialog({ open, onOpenChange, transaction
       transaction.id,
       parts.map((p, i) => ({
         amount: cents[i] / 100,
-        category: p.category,
+        categoryId: p.categoryId,
         notes: p.notes.trim(),
       }))
     );
@@ -136,7 +136,7 @@ export default function SplitTransactionDialog({ open, onOpenChange, transaction
                     className={inputCls}
                     autoFocus={i === 0}
                   />
-                  <CategoryPicker value={p.category} onChange={(category) => setPart(i, { category })} />
+                  <CategoryPicker value={p.categoryId} onChange={(categoryId) => setPart(i, { categoryId })} />
                   <input
                     value={p.notes}
                     onChange={(e) => setPart(i, { notes: e.target.value })}

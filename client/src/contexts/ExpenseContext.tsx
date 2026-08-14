@@ -1,14 +1,15 @@
 /*
   Central data store — file-first.
   The source of truth is a folder on the user's disk (File System Access API):
-  transactions.csv / categories.csv / projects.csv / rules.csv / import-profiles.json.
+  transactions.csv / categories.csv / rules.csv / import-profiles.json.
   - Every mutation writes the affected file immediately (per-file write queue)
   - External edits (AI agents, Excel) are picked up via mtime checks on focus
     and a slow interval
-  - The category tree (categories.csv) is authoritative: on load, transaction
-    groups are rewritten to match it and unknown categories are registered
-  - Legacy IndexedDB data (from the previous version) seeds the folder chosen
-    on first connect if that folder is empty
+  - categories.csv is an arbitrary-depth tree (adjacency list). Transactions
+    reference a node by id and may be filed on ANY node; reports roll
+    descendants up into ancestors. Tree edits never rewrite transactions.csv.
+  - A node flagged oneOff is a "project" (one-off cost centre); the
+    hideOneOffs setting excludes those subtrees from the overview analytics.
 */
 import {
   createContext,
@@ -23,17 +24,24 @@ import {
 import type {
   Transaction,
   StoredTransaction,
-  CategoryDef,
-  Project,
+  CategoryNode,
   Rule,
   ImportProfile,
   Settings,
   MonthlyData,
-  CategoryData,
-  GroupData,
+  NodeStats,
 } from "@/lib/types";
-import { MONTH_LABELS, UNCATEGORIZED, DEFAULT_GROUP, groupColor } from "@/lib/types";
-import { dbGet, dbSet, dbDel, KEYS, uid } from "@/lib/db";
+import { MONTH_LABELS, groupColor } from "@/lib/types";
+import {
+  buildTree,
+  makeUncategorizedNode,
+  slugForName,
+  validateName,
+  UNCATEGORIZED_ID,
+  PATH_SEP,
+  type CategoryTree,
+} from "@/lib/tree";
+import { dbGet, dbSet, KEYS, uid } from "@/lib/db";
 import { transactionsToCsv } from "@/lib/export";
 import {
   WS_FILES,
@@ -49,8 +57,7 @@ import {
   writeWorkspaceFileIfAbsent,
   getWorkspaceFileMtime,
   ensureWorkspaceReadme,
-  categoriesToCsv,
-  projectsToCsv,
+  nodesToCsv,
   rulesToCsv,
   type WorkspaceData,
 } from "@/lib/workspace";
@@ -67,7 +74,7 @@ export type WorkspaceStatus =
   | "error";
 
 export interface TransactionChanges {
-  category?: string; // group follows automatically
+  categoryId?: string;
   account?: string;
   notes?: string;
   description?: string;
@@ -83,8 +90,6 @@ interface ExpenseContextType {
   workspaceStatus: WorkspaceStatus;
   workspaceName: string;
   workspaceError: string | null;
-  /** Transactions found in legacy IndexedDB storage awaiting migration */
-  legacyCount: number;
   chooseWorkspaceFolder: () => Promise<void>;
   reconnectWorkspace: () => Promise<void>;
   disconnectWorkspace: () => Promise<void>;
@@ -98,13 +103,13 @@ interface ExpenseContextType {
   storedTransactions: StoredTransaction[];
 
   /** The category tree */
-  categoryDefs: CategoryDef[];
-  categoryGroups: Map<string, string>;
-  groupOf: (category: string) => string;
+  nodes: CategoryNode[];
+  tree: CategoryTree;
+  nameOf: (id: string) => string;
+  pathOf: (id: string) => string;
+  /** Chart color for a node: its own color, else its root's, else the name hash */
+  colorOf: (id: string) => string;
 
-  projects: Project[];
-  /** Group names belonging to archived projects — retired from pickers/rules/suggestions */
-  archivedGroups: Set<string>;
   rules: Rule[];
   importProfiles: ImportProfile[];
 
@@ -115,17 +120,26 @@ interface ExpenseContextType {
   /** Human-readable form of the current scope, e.g. "2025" or "1 Jun 2024 – 13 Aug 2025" */
   scopeLabel: string;
 
-  // Derived (scoped)
+  /** Exclude one-off (project) subtrees from the overview analytics below */
+  hideOneOffs: boolean;
+  setHideOneOffs: (hide: boolean) => void;
+  /** True when the scoped data actually contains one-off spending (show the toggle) */
+  hasOneOffSpend: boolean;
+
+  // Derived overview analytics (scoped; respect hideOneOffs)
   totalSpend: number;
   monthlyData: MonthlyData[];
-  categoryData: CategoryData[];
-  groupData: GroupData[];
-  categories: string[];
+  /** Root (top-level) buckets, sorted by rolled-up total desc */
+  groupData: NodeStats[];
+  /** Root bucket names with activity, sorted by total desc */
   groups: string[];
-  allGroups: string[];
-  accounts: string[];
   avgMonthlySpend: number;
   groupColors: Record<string, string>;
+
+  // Per-node aggregates (scoped; NOT filtered by hideOneOffs — used by drill-down)
+  nodeStats: Map<string, NodeStats>;
+
+  accounts: string[];
 
   // Transaction actions
   addTransactions: (txns: StoredTransaction[]) => void;
@@ -138,25 +152,41 @@ interface ExpenseContextType {
    */
   splitTransaction: (
     id: string,
-    parts: Array<{ amount: number; category: string; notes: string }>
+    parts: Array<{ amount: number; categoryId: string; notes: string }>
   ) => void;
   /** Set each transaction's category individually (used to undo a rule run) */
-  revertCategories: (items: Array<{ id: string; category: string }>) => void;
+  revertCategories: (items: Array<{ id: string; categoryId: string }>) => void;
 
   // Category tree management
-  addCategory: (name: string, group: string) => void;
-  renameCategory: (from: string, to: string) => number;
-  setCategoryGroup: (category: string, group: string) => number;
-  deleteCategory: (name: string) => number;
-  renameGroup: (from: string, to: string) => number;
+  /** Returns the new node, or null (with a toast) if the name clashes among siblings */
+  addNode: (
+    name: string,
+    parentId: string | null,
+    meta?: Partial<Pick<CategoryNode, "oneOff" | "color" | "budget" | "notes">>
+  ) => CategoryNode | null;
+  renameNode: (id: string, name: string) => boolean;
+  /** Re-parent a node (subtree moves with it). Returns false for cycles/clashes. */
+  moveNode: (id: string, parentId: string | null) => boolean;
+  setNodeMeta: (
+    id: string,
+    patch: Partial<Pick<CategoryNode, "oneOff" | "color" | "budget" | "notes">>
+  ) => void;
+  /** Archive/restore a subtree. Archiving disables rules pointing into it. */
+  setNodeArchived: (id: string, archived: boolean) => void;
+  /**
+   * Dissolve a node: children re-parent to its parent, its transactions and
+   * rules move to the parent (root nodes: transactions → Uncategorized,
+   * rules deleted). Returns how many transactions were re-filed.
+   */
+  deleteNode: (id: string) => number;
 
-  // Projects (metadata on a group)
-  addProject: (
-    p: Omit<Project, "id" | "createdAt">,
-    starterCategories?: string[]
-  ) => Project;
-  updateProject: (id: string, patch: Partial<Omit<Project, "id" | "createdAt">>) => void;
-  deleteProject: (id: string) => void;
+  /** Resolve a category name or full path to a node id (import flows) */
+  resolveCategory: (nameOrPath: string) => string | undefined;
+  /**
+   * Resolve-or-create a batch of names/paths in one write (path segments
+   * become nested nodes). Returns name → node id.
+   */
+  ensureCategories: (nameOrPaths: string[]) => Record<string, string>;
 
   // Rules
   addRule: (r: Omit<Rule, "id" | "createdAt">) => void;
@@ -171,72 +201,13 @@ interface ExpenseContextType {
   // Backup restore (writes into the workspace)
   replaceAllData: (data: {
     transactions: StoredTransaction[];
-    categories?: CategoryDef[];
-    projects?: Project[];
+    nodes?: CategoryNode[];
     rules?: Rule[];
     importProfiles?: ImportProfile[];
   }) => void;
 }
 
 const ExpenseContext = createContext<ExpenseContextType | null>(null);
-
-function toRuntime(t: StoredTransaction): Transaction {
-  const [y, m, d] = t.date.split("-").map(Number);
-  return {
-    ...t,
-    date: new Date(y, m - 1, d),
-    dateStr: t.date,
-    account: t.account ?? "",
-  };
-}
-
-/** Derive the category tree from transaction data (majority group per category) */
-function deriveDefs(txns: StoredTransaction[]): CategoryDef[] {
-  const counts = new Map<string, Map<string, number>>();
-  for (const t of txns) {
-    if (!counts.has(t.category)) counts.set(t.category, new Map());
-    const g = counts.get(t.category)!;
-    g.set(t.group || DEFAULT_GROUP, (g.get(t.group || DEFAULT_GROUP) || 0) + 1);
-  }
-  const defs: CategoryDef[] = [];
-  for (const [name, gcounts] of counts) {
-    defs.push({
-      name,
-      group: [...gcounts.entries()].sort((a, b) => b[1] - a[1])[0][0],
-    });
-  }
-  return defs;
-}
-
-/**
- * Enforce the strict tree on loaded data: categories.csv is authoritative for
- * a transaction's group; categories seen only in transactions get registered.
- */
-function normalizeLoaded(
-  txns: StoredTransaction[],
-  defs: CategoryDef[]
-): { txns: StoredTransaction[]; defs: CategoryDef[]; txnsChanged: boolean; defsChanged: boolean } {
-  const nextDefs = [...defs];
-  const known = new Map(nextDefs.map((d) => [d.name, d.group]));
-  let txnsChanged = false;
-  let defsChanged = false;
-  const nextTxns = txns.map((t) => {
-    const cat = t.category || UNCATEGORIZED;
-    let group = known.get(cat);
-    if (group === undefined) {
-      group = t.group || DEFAULT_GROUP;
-      nextDefs.push({ name: cat, group });
-      known.set(cat, group);
-      defsChanged = true;
-    }
-    if (t.category !== cat || t.group !== group) {
-      txnsChanged = true;
-      return { ...t, category: cat, group };
-    }
-    return t;
-  });
-  return { txns: nextTxns, defs: nextDefs, txnsChanged, defsChanged };
-}
 
 function serializeTxns(txns: StoredTransaction[]): string {
   const sorted = [...txns].sort(
@@ -245,7 +216,39 @@ function serializeTxns(txns: StoredTransaction[]): string {
   return transactionsToCsv(sorted) + "\n";
 }
 
-const LEGACY_KEYS = [KEYS.transactions, KEYS.categories, KEYS.projects, KEYS.rules, KEYS.importProfiles, KEYS.seeded];
+/**
+ * Ensure loaded data is coherent: the Uncategorized root exists and every
+ * transaction's categoryId points at a real node. Unknown ids (e.g. an agent
+ * referenced a node it forgot to add) are auto-registered as root nodes named
+ * after the id so no data is lost — visible and fixable in the app.
+ */
+function normalizeLoaded(
+  txns: StoredTransaction[],
+  nodes: CategoryNode[]
+): { txns: StoredTransaction[]; nodes: CategoryNode[]; txnsChanged: boolean; nodesChanged: boolean } {
+  const nextNodes = [...nodes];
+  let nodesChanged = false;
+  if (!nextNodes.some((n) => n.id === UNCATEGORIZED_ID)) {
+    nextNodes.push(makeUncategorizedNode());
+    nodesChanged = true;
+  }
+  const known = new Set(nextNodes.map((n) => n.id));
+  let txnsChanged = false;
+  const nextTxns = txns.map((t) => {
+    const cat = t.categoryId || UNCATEGORIZED_ID;
+    if (!known.has(cat)) {
+      nextNodes.push({ id: cat, parentId: null, name: cat });
+      known.add(cat);
+      nodesChanged = true;
+    }
+    if (t.categoryId !== cat) {
+      txnsChanged = true;
+      return { ...t, categoryId: cat };
+    }
+    return t;
+  });
+  return { txns: nextTxns, nodes: nextNodes, txnsChanged, nodesChanged };
+}
 
 export function ExpenseProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
@@ -253,11 +256,9 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   const [wsStatus, setWsStatus] = useState<WorkspaceStatus>("checking");
   const [wsName, setWsName] = useState("");
   const [wsError, setWsError] = useState<string | null>(null);
-  const [legacyCount, setLegacyCount] = useState(0);
 
   const [stored, setStored] = useState<StoredTransaction[]>([]);
-  const [categoryDefs, setCategoryDefs] = useState<CategoryDef[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [nodes, setNodes] = useState<CategoryNode[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const [importProfiles, setImportProfiles] = useState<ImportProfile[]>([]);
   const [settings, setSettings] = useState<Settings>({ yearScope: "all" });
@@ -273,13 +274,6 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   const mtimesRef = useRef<Record<string, number>>({});
   const writeQueue = useRef<Record<string, Promise<void>>>({});
   const checkingRef = useRef(false);
-  const legacyRef = useRef<{
-    transactions: StoredTransaction[];
-    categories: CategoryDef[];
-    projects: Project[];
-    rules: Rule[];
-    importProfiles: ImportProfile[];
-  } | null>(null);
 
   // ---------- Write scheduling (per-file queue, immediate) ----------
   const scheduleWrite = useCallback((fileName: string, content: string) => {
@@ -312,19 +306,11 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     },
     [scheduleWrite, guardMutation]
   );
-  const persistDefs = useCallback(
-    (next: CategoryDef[]) => {
+  const persistNodes = useCallback(
+    (next: CategoryNode[]) => {
       if (!guardMutation()) return;
-      setCategoryDefs(next);
-      scheduleWrite(WS_FILES.categories, categoriesToCsv(next));
-    },
-    [scheduleWrite, guardMutation]
-  );
-  const persistProjects = useCallback(
-    (next: Project[]) => {
-      if (!guardMutation()) return;
-      setProjects(next);
-      scheduleWrite(WS_FILES.projects, projectsToCsv(next));
+      setNodes(next);
+      scheduleWrite(WS_FILES.categories, nodesToCsv(next));
     },
     [scheduleWrite, guardMutation]
   );
@@ -352,20 +338,16 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   // ---------- Loading workspace contents into state ----------
   const applyLoaded = useCallback(
     (data: WorkspaceData, mtimes: Record<string, number>) => {
-      const norm = normalizeLoaded(
-        data.transactions,
-        data.categories.length > 0 ? data.categories : deriveDefs(data.transactions)
-      );
+      const norm = normalizeLoaded(data.transactions, data.nodes);
       mtimesRef.current = { ...mtimesRef.current, ...mtimes };
       setStored(norm.txns);
-      setCategoryDefs(norm.defs);
-      setProjects(data.projects);
+      setNodes(norm.nodes);
       setRules(data.rules);
       setImportProfiles(data.importProfiles);
-      // Write back tree-normalisation fixes so the files stay consistent
+      // Write back normalisation fixes so the files stay consistent
       if (norm.txnsChanged) scheduleWrite(WS_FILES.transactions, serializeTxns(norm.txns));
-      if (norm.defsChanged || data.categories.length === 0) {
-        scheduleWrite(WS_FILES.categories, categoriesToCsv(norm.defs));
+      if (norm.nodesChanged || data.nodes.length === 0) {
+        scheduleWrite(WS_FILES.categories, nodesToCsv(norm.nodes));
       }
     },
     [scheduleWrite]
@@ -397,35 +379,20 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         dirRef.current = dir;
 
         if (!data.hasTransactionsFile) {
-          // No transactions.csv — initialize it, seeding from legacy in-browser
-          // data if we have any. Only ever CREATE files here, never overwrite:
-          // a folder with sidecar files but no transactions.csv must keep them.
-          const seed = legacyRef.current;
-          const txns = seed?.transactions ?? [];
-          const defs = seed?.categories.length ? seed.categories : deriveDefs(txns);
-          mtimes[WS_FILES.transactions] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.transactions, serializeTxns(txns));
-          mtimes[WS_FILES.categories] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.categories, categoriesToCsv(defs));
-          mtimes[WS_FILES.projects] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.projects, projectsToCsv(seed?.projects ?? []));
-          mtimes[WS_FILES.rules] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.rules, rulesToCsv(seed?.rules ?? []));
-          mtimes[WS_FILES.profiles] = await writeWorkspaceFileIfAbsent(
-            dir,
-            WS_FILES.profiles,
-            JSON.stringify(seed?.importProfiles ?? [], null, 2) + "\n"
-          );
+          // No transactions.csv — initialize an empty workspace. Only ever
+          // CREATE files here, never overwrite: a folder with sidecar files
+          // but no transactions.csv must keep them.
+          mtimes[WS_FILES.transactions] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.transactions, serializeTxns([]));
+          mtimes[WS_FILES.categories] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.categories, nodesToCsv([makeUncategorizedNode()]));
+          mtimes[WS_FILES.rules] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.rules, rulesToCsv([]));
+          mtimes[WS_FILES.profiles] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.profiles, "[]\n");
           await ensureWorkspaceReadme(dir);
           // Re-read so pre-existing sidecar files win over the seed
           const reread = await readWorkspace(dir);
           applyLoaded(reread.data, reread.mtimes);
-          if (seed) toast.success(`Saved ${seed.transactions.length} transactions into ${dir.name}`);
         } else {
+          await ensureWorkspaceReadme(dir);
           applyLoaded(data, mtimes);
-        }
-
-        // Legacy in-browser data has served its purpose
-        if (legacyRef.current) {
-          legacyRef.current = null;
-          setLegacyCount(0);
-          void Promise.all(LEGACY_KEYS.map((k) => dbDel(k)));
         }
 
         handleRef.current = dir;
@@ -456,41 +423,6 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         setWsStatus("unsupported");
         setLoading(false);
         return;
-      }
-
-      // Stash legacy IndexedDB data (pre-file-workspace versions) for migration
-      try {
-        const [txnsRaw, defsRaw, projsRaw, rlsRaw, profiles] = await Promise.all([
-          dbGet<any[]>(KEYS.transactions),
-          dbGet<CategoryDef[]>(KEYS.categories),
-          dbGet<any[]>(KEYS.projects),
-          dbGet<any[]>(KEYS.rules),
-          dbGet<ImportProfile[]>(KEYS.importProfiles),
-        ]);
-        if (txnsRaw && txnsRaw.length > 0) {
-          const txns: StoredTransaction[] = txnsRaw.map((t) => {
-            const { tags: _tags, ...rest } = t;
-            return rest as StoredTransaction;
-          });
-          legacyRef.current = {
-            transactions: txns,
-            categories: defsRaw ?? [],
-            projects: (projsRaw ?? []).map((p) => {
-              const { tag: _tag, ...rest } = p;
-              return rest as Project;
-            }),
-            rules: (rlsRaw ?? [])
-              .filter((r) => r.category)
-              .map((r) => {
-                const { tags: _tags, group: _group, ...rest } = r;
-                return rest as Rule;
-              }),
-            importProfiles: profiles ?? [],
-          };
-          setLegacyCount(txns.length);
-        }
-      } catch {
-        // legacy data is best-effort only
       }
 
       const handle = await loadWorkspaceHandle();
@@ -544,8 +476,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     handleRef.current = null;
     mtimesRef.current = {};
     setStored([]);
-    setCategoryDefs([]);
-    setProjects([]);
+    setNodes([]);
     setRules([]);
     setImportProfiles([]);
     setWsName("");
@@ -610,42 +541,39 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   }, [checkExternal]);
 
   // ---------- Category tree lookups ----------
-  const categoryGroups = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const d of categoryDefs) map.set(d.name, d.group);
-    return map;
-  }, [categoryDefs]);
+  const tree = useMemo(() => buildTree(nodes), [nodes]);
 
-  const groupOf = useCallback(
-    (category: string) => categoryGroups.get(category) ?? DEFAULT_GROUP,
-    [categoryGroups]
-  );
+  const nameOf = useCallback((id: string) => tree.byId.get(id)?.name ?? id, [tree]);
+  const pathOf = useCallback((id: string) => tree.pathOf(id), [tree]);
 
-  const normalizeAgainstTree = useCallback(
-    (txns: StoredTransaction[]) => {
-      const defs = [...categoryDefs];
-      const known = new Map(defs.map((d) => [d.name, d.group]));
-      const normalized = txns.map((t) => {
-        const cat = t.category || UNCATEGORIZED;
-        let group = known.get(cat);
-        if (group === undefined) {
-          group = t.group || DEFAULT_GROUP;
-          defs.push({ name: cat, group });
-          known.set(cat, group);
-        }
-        return { ...t, category: cat, group };
-      });
-      return { normalized, defs, defsChanged: defs.length !== categoryDefs.length };
+  const colorOf = useCallback(
+    (id: string) => {
+      const node = tree.byId.get(id);
+      if (node?.color) return node.color;
+      const root = tree.rootOf(id);
+      if (root?.color) return root.color;
+      return groupColor(root?.name ?? id);
     },
-    [categoryDefs]
+    [tree]
   );
 
   // ---------- Runtime + scoped views ----------
   const allTransactions = useMemo(() => {
-    const list = stored.map(toRuntime);
+    const list = stored.map((t): Transaction => {
+      const [y, m, d] = t.date.split("-").map(Number);
+      return {
+        ...t,
+        date: new Date(y, m - 1, d),
+        dateStr: t.date,
+        account: t.account ?? "",
+        category: nameOf(t.categoryId),
+        path: tree.pathOf(t.categoryId),
+        group: tree.rootOf(t.categoryId)?.name ?? t.categoryId,
+      };
+    });
     list.sort((a, b) => a.date.getTime() - b.date.getTime());
     return list;
-  }, [stored]);
+  }, [stored, tree, nameOf]);
 
   const availableYears = useMemo(() => {
     const years = new Set<string>();
@@ -675,6 +603,23 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     [settings, persistSettings]
   );
 
+  const hideOneOffs = !!settings.hideOneOffs;
+  const setHideOneOffs = useCallback(
+    (hide: boolean) => persistSettings({ ...settings, hideOneOffs: hide }),
+    [settings, persistSettings]
+  );
+
+  const hasOneOffSpend = useMemo(
+    () => transactions.some((t) => tree.isOneOff(t.categoryId)),
+    [transactions, tree]
+  );
+
+  /** Overview analytics exclude one-off subtrees when the toggle is on */
+  const analysisTransactions = useMemo(
+    () => (hideOneOffs ? transactions.filter((t) => !tree.isOneOff(t.categoryId)) : transactions),
+    [transactions, tree, hideOneOffs]
+  );
+
   // ---------- Derived analytics (scoped) ----------
   // Month labels carry the year whenever the scoped data spans more than one
   const multiYear = useMemo(
@@ -683,13 +628,13 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   );
 
   const totalSpend = useMemo(
-    () => transactions.reduce((sum, t) => sum + t.amount, 0),
-    [transactions]
+    () => analysisTransactions.reduce((sum, t) => sum + t.amount, 0),
+    [analysisTransactions]
   );
 
   const monthlyData = useMemo(() => {
     const map = new Map<string, MonthlyData>();
-    for (const t of transactions) {
+    for (const t of analysisTransactions) {
       const key = `${t.date.getFullYear()}-${String(t.date.getMonth() + 1).padStart(2, "0")}`;
       if (!map.has(key)) {
         const base = MONTH_LABELS[t.date.getMonth()];
@@ -705,73 +650,77 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
       const m = map.get(key)!;
       m.total += t.amount;
       m.count += 1;
-      m.categories[t.category] = (m.categories[t.category] || 0) + t.amount;
+      m.categories[t.categoryId] = (m.categories[t.categoryId] || 0) + t.amount;
       m.groups[t.group] = (m.groups[t.group] || 0) + t.amount;
     }
     return Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month));
-  }, [transactions, multiYear]);
+  }, [analysisTransactions, multiYear]);
 
-  const categoryData = useMemo(() => {
-    const map = new Map<string, { total: number; count: number }>();
-    for (const t of transactions) {
-      if (!map.has(t.category)) map.set(t.category, { total: 0, count: 0 });
-      const c = map.get(t.category)!;
-      c.total += t.amount;
-      c.count += 1;
-    }
-    const result: CategoryData[] = Array.from(map.entries()).map(([name, data]) => ({
-      name,
-      total: data.total,
-      count: data.count,
-      avgPerTransaction: data.total / data.count,
-      group: groupOf(name),
-    }));
-    return result.sort((a, b) => b.total - a.total);
-  }, [transactions, groupOf]);
-
-  const groupData = useMemo(() => {
-    const map = new Map<string, { total: number; count: number; categories: Set<string> }>();
-    for (const t of transactions) {
-      if (!map.has(t.group)) {
-        map.set(t.group, { total: 0, count: 0, categories: new Set() });
+  /** Per-node rollup over a transaction list */
+  const statsOver = useCallback(
+    (txns: Transaction[]): Map<string, NodeStats> => {
+      const map = new Map<string, NodeStats>();
+      const ensure = (id: string): NodeStats => {
+        let s = map.get(id);
+        if (!s) {
+          const n = tree.byId.get(id);
+          s = {
+            id,
+            name: n?.name ?? id,
+            path: tree.pathOf(id),
+            depth: tree.depthOf(id),
+            parentId: n?.parentId && tree.byId.has(n.parentId) ? n.parentId : null,
+            direct: 0,
+            directCount: 0,
+            total: 0,
+            count: 0,
+          };
+          map.set(id, s);
+        }
+        return s;
+      };
+      for (const t of txns) {
+        const self = ensure(t.categoryId);
+        self.direct += t.amount;
+        self.directCount += 1;
+        // roll up through the ancestor chain (self included)
+        let cur: string | null = t.categoryId;
+        const seen = new Set<string>();
+        while (cur !== null && !seen.has(cur)) {
+          seen.add(cur);
+          const s = ensure(cur);
+          s.total += t.amount;
+          s.count += 1;
+          const n = tree.byId.get(cur);
+          cur = n?.parentId && tree.byId.has(n.parentId) ? n.parentId : null;
+        }
       }
-      const g = map.get(t.group)!;
-      g.total += t.amount;
-      g.count += 1;
-      g.categories.add(t.category);
-    }
-    const result: GroupData[] = Array.from(map.entries()).map(([name, data]) => ({
-      name,
-      total: data.total,
-      count: data.count,
-      categories: Array.from(data.categories),
-    }));
-    return result.sort((a, b) => b.total - a.total);
-  }, [transactions]);
+      return map;
+    },
+    [tree]
+  );
 
-  const categories = useMemo(() => categoryData.map((c) => c.name), [categoryData]);
+  /** All-nodes aggregates for the drill-down view (not filtered by hideOneOffs) */
+  const nodeStats = useMemo(() => statsOver(transactions), [transactions, statsOver]);
+
+  /** Root buckets for the overview charts (respects hideOneOffs) */
+  const groupData = useMemo(() => {
+    const stats = hideOneOffs ? statsOver(analysisTransactions) : nodeStats;
+    const roots = (tree.children.get(null) ?? [])
+      .map((n) => stats.get(n.id))
+      .filter((s): s is NodeStats => !!s && s.count > 0);
+    return roots.sort((a, b) => b.total - a.total);
+  }, [tree, nodeStats, statsOver, analysisTransactions, hideOneOffs]);
+
   const groups = useMemo(() => groupData.map((g) => g.name), [groupData]);
-
-  const allGroups = useMemo(() => {
-    const set = new Set<string>();
-    for (const d of categoryDefs) set.add(d.group);
-    for (const p of projects) set.add(p.name);
-    for (const t of stored) set.add(t.group);
-    set.add(DEFAULT_GROUP);
-    return Array.from(set).sort();
-  }, [categoryDefs, projects, stored]);
 
   const groupColors = useMemo(() => {
     const map: Record<string, string> = {};
-    for (const g of allGroups) map[g] = groupColor(g);
-    for (const p of projects) map[p.name] = p.color;
+    for (const n of tree.children.get(null) ?? []) {
+      map[n.name] = n.color ?? groupColor(n.name);
+    }
     return map;
-  }, [allGroups, projects]);
-
-  const archivedGroups = useMemo(
-    () => new Set(projects.filter((p) => p.status === "archived").map((p) => p.name)),
-    [projects]
-  );
+  }, [tree]);
 
   const accounts = useMemo(() => {
     const set = new Set<string>();
@@ -785,25 +734,42 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   );
 
   // ---------- Transaction actions ----------
+  const registerUnknownIds = useCallback(
+    (txns: StoredTransaction[]): CategoryNode[] | null => {
+      const missing = new Set<string>();
+      for (const t of txns) {
+        if (t.categoryId && !tree.byId.has(t.categoryId)) missing.add(t.categoryId);
+      }
+      if (missing.size === 0) return null;
+      return [
+        ...nodes,
+        ...Array.from(missing).map((id) => ({ id, parentId: null, name: id })),
+      ];
+    },
+    [tree, nodes]
+  );
+
   const addTransactions = useCallback(
     (txns: StoredTransaction[]) => {
-      const { normalized, defs, defsChanged } = normalizeAgainstTree(txns);
+      const normalized = txns.map((t) => ({
+        ...t,
+        categoryId: t.categoryId || UNCATEGORIZED_ID,
+      }));
+      const withNew = registerUnknownIds(normalized);
+      if (withNew) persistNodes(withNew);
       persistTxns([...stored, ...normalized]);
-      if (defsChanged) persistDefs(defs);
     },
-    [stored, normalizeAgainstTree, persistTxns, persistDefs]
+    [stored, registerUnknownIds, persistTxns, persistNodes]
   );
 
   const updateTransactions = useCallback(
     (ids: string[], changes: TransactionChanges) => {
       const idSet = new Set(ids);
-      const group = changes.category !== undefined ? groupOf(changes.category) : undefined;
       const next = stored.map((t) => {
         if (!idSet.has(t.id)) return t;
         return {
           ...t,
-          category: changes.category ?? t.category,
-          group: group ?? t.group,
+          categoryId: changes.categoryId ?? t.categoryId,
           account: changes.account ?? t.account,
           notes: changes.notes ?? t.notes,
           description: changes.description ?? t.description,
@@ -813,7 +779,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
       });
       persistTxns(next);
     },
-    [stored, groupOf, persistTxns]
+    [stored, persistTxns]
   );
 
   const deleteTransactions = useCallback(
@@ -825,7 +791,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   );
 
   const splitTransaction = useCallback(
-    (id: string, parts: Array<{ amount: number; category: string; notes: string }>) => {
+    (id: string, parts: Array<{ amount: number; categoryId: string; notes: string }>) => {
       const parent = stored.find((t) => t.id === id);
       if (!parent || parts.length < 2) return;
       const base = uid();
@@ -834,158 +800,212 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         date: parent.date,
         description: parent.description,
         amount: p.amount,
-        category: p.category,
-        group: DEFAULT_GROUP,
+        categoryId: p.categoryId || UNCATEGORIZED_ID,
         account: parent.account,
         notes: p.notes,
       }));
-      const { normalized, defs, defsChanged } = normalizeAgainstTree(rows);
-      persistTxns(stored.flatMap((t) => (t.id === id ? normalized : [t])));
-      if (defsChanged) persistDefs(defs);
+      persistTxns(stored.flatMap((t) => (t.id === id ? rows : [t])));
     },
-    [stored, normalizeAgainstTree, persistTxns, persistDefs]
+    [stored, persistTxns]
+  );
+
+  const revertCategories = useCallback(
+    (items: Array<{ id: string; categoryId: string }>) => {
+      const byId = new Map(items.map((i) => [i.id, i.categoryId]));
+      persistTxns(
+        stored.map((t) => {
+          const cat = byId.get(t.id);
+          if (cat === undefined || cat === t.categoryId) return t;
+          return { ...t, categoryId: cat };
+        })
+      );
+    },
+    [stored, persistTxns]
   );
 
   // ---------- Category tree management ----------
-  const addCategory = useCallback(
-    (name: string, group: string) => {
-      if (categoryDefs.some((d) => d.name === name)) return;
-      persistDefs([...categoryDefs, { name, group }]);
-    },
-    [categoryDefs, persistDefs]
-  );
-
-  const renameCategory = useCallback(
-    (from: string, to: string) => {
-      const target = categoryDefs.find((d) => d.name === to);
-      const source = categoryDefs.find((d) => d.name === from);
-      const group = target?.group ?? source?.group ?? DEFAULT_GROUP;
-      let count = 0;
-      persistTxns(
-        stored.map((t) => {
-          if (t.category !== from) return t;
-          count++;
-          return { ...t, category: to, group };
-        })
-      );
-      const defs = categoryDefs.filter((d) => d.name !== from);
-      if (!target) defs.push({ name: to, group });
-      persistDefs(defs);
-      persistRules(rules.map((r) => (r.category === from ? { ...r, category: to } : r)));
-      return count;
-    },
-    [stored, categoryDefs, rules, persistTxns, persistDefs, persistRules]
-  );
-
-  const setCategoryGroup = useCallback(
-    (category: string, group: string) => {
-      let count = 0;
-      persistTxns(
-        stored.map((t) => {
-          if (t.category !== category || t.group === group) return t;
-          count++;
-          return { ...t, group };
-        })
-      );
-      persistDefs(
-        categoryDefs.some((d) => d.name === category)
-          ? categoryDefs.map((d) => (d.name === category ? { ...d, group } : d))
-          : [...categoryDefs, { name: category, group }]
-      );
-      return count;
-    },
-    [stored, categoryDefs, persistTxns, persistDefs]
-  );
-
-  const deleteCategory = useCallback(
-    (name: string) => {
-      let count = 0;
-      persistTxns(
-        stored.map((t) => {
-          if (t.category !== name) return t;
-          count++;
-          return { ...t, category: UNCATEGORIZED, group: DEFAULT_GROUP };
-        })
-      );
-      persistDefs(categoryDefs.filter((d) => d.name !== name));
-      persistRules(rules.filter((r) => r.category !== name));
-      return count;
-    },
-    [stored, categoryDefs, rules, persistTxns, persistDefs, persistRules]
-  );
-
-  const renameGroup = useCallback(
-    (from: string, to: string) => {
-      let count = 0;
-      persistTxns(
-        stored.map((t) => {
-          if (t.group !== from) return t;
-          count++;
-          return { ...t, group: to };
-        })
-      );
-      persistDefs(categoryDefs.map((d) => (d.group === from ? { ...d, group: to } : d)));
-      persistProjects(projects.map((p) => (p.name === from ? { ...p, name: to } : p)));
-      return count;
-    },
-    [stored, categoryDefs, projects, persistTxns, persistDefs, persistProjects]
-  );
-
-  // ---------- Projects ----------
-  const addProject = useCallback(
-    (p: Omit<Project, "id" | "createdAt">, starterCategories: string[] = []) => {
-      const project: Project = { ...p, id: uid(), createdAt: new Date().toISOString() };
-      persistProjects([...projects, project]);
-      const newDefs = starterCategories
-        .map((c) => c.trim())
-        .filter((c) => c && !categoryDefs.some((d) => d.name === c))
-        .map((name) => ({ name, group: project.name }));
-      if (newDefs.length > 0) persistDefs([...categoryDefs, ...newDefs]);
-      return project;
-    },
-    [projects, categoryDefs, persistProjects, persistDefs]
-  );
-
-  const updateProject = useCallback(
-    (id: string, patch: Partial<Omit<Project, "id" | "createdAt">>) => {
-      const prev = projects.find((p) => p.id === id);
-      if (!prev) return;
-      const renaming = patch.name !== undefined && patch.name !== prev.name;
-      if (renaming) {
-        const from = prev.name;
-        const to = patch.name!;
-        persistTxns(stored.map((t) => (t.group === from ? { ...t, group: to } : t)));
-        persistDefs(categoryDefs.map((d) => (d.group === from ? { ...d, group: to } : d)));
+  const addNode = useCallback(
+    (
+      name: string,
+      parentId: string | null,
+      meta?: Partial<Pick<CategoryNode, "oneOff" | "color" | "budget" | "notes">>
+    ): CategoryNode | null => {
+      const err = validateName(tree, name, parentId);
+      if (err) {
+        toast.error(err);
+        return null;
       }
-      persistProjects(projects.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+      const node: CategoryNode = {
+        id: slugForName(name.trim(), tree.byId.keys()),
+        parentId,
+        name: name.trim(),
+        ...meta,
+        createdAt: new Date().toISOString(),
+      };
+      persistNodes([...nodes, node]);
+      return node;
+    },
+    [tree, nodes, persistNodes]
+  );
 
-      // Archiving retires the project's rules so future imports can't file
+  const renameNode = useCallback(
+    (id: string, name: string): boolean => {
+      const node = tree.byId.get(id);
+      if (!node) return false;
+      const err = validateName(tree, name, node.parentId, id);
+      if (err) {
+        toast.error(err);
+        return false;
+      }
+      persistNodes(nodes.map((n) => (n.id === id ? { ...n, name: name.trim() } : n)));
+      return true;
+    },
+    [tree, nodes, persistNodes]
+  );
+
+  const moveNode = useCallback(
+    (id: string, parentId: string | null): boolean => {
+      const node = tree.byId.get(id);
+      if (!node) return false;
+      if (parentId !== null && tree.subtreeIds(id).has(parentId)) {
+        toast.error("Can't move a category into its own subtree");
+        return false;
+      }
+      const err = validateName(tree, node.name, parentId, id);
+      if (err) {
+        toast.error(err);
+        return false;
+      }
+      persistNodes(nodes.map((n) => (n.id === id ? { ...n, parentId } : n)));
+      return true;
+    },
+    [tree, nodes, persistNodes]
+  );
+
+  const setNodeMeta = useCallback(
+    (
+      id: string,
+      patch: Partial<Pick<CategoryNode, "oneOff" | "color" | "budget" | "notes">>
+    ) => {
+      persistNodes(nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)));
+    },
+    [nodes, persistNodes]
+  );
+
+  const setNodeArchived = useCallback(
+    (id: string, archived: boolean) => {
+      const node = tree.byId.get(id);
+      if (!node) return;
+      persistNodes(nodes.map((n) => (n.id === id ? { ...n, archived } : n)));
+
+      // Archiving retires the subtree's rules so future imports can't file
       // new spending into it. Restoring does NOT auto-re-enable them.
-      if (patch.status === "archived" && prev.status !== "archived") {
-        const projectCats = new Set(
-          categoryDefs.filter((d) => d.group === prev.name).map((d) => d.name)
-        );
-        const affected = rules.filter((r) => r.enabled && projectCats.has(r.category));
+      if (archived) {
+        const subtree = tree.subtreeIds(id);
+        const affected = rules.filter((r) => r.enabled && subtree.has(r.categoryId));
         if (affected.length > 0) {
           persistRules(
             rules.map((r) =>
-              r.enabled && projectCats.has(r.category) ? { ...r, enabled: false } : r
+              r.enabled && subtree.has(r.categoryId) ? { ...r, enabled: false } : r
             )
           );
           toast.info(
-            `Disabled ${affected.length} auto-categorisation rule${affected.length === 1 ? "" : "s"} pointing at "${prev.name}"`
+            `Disabled ${affected.length} auto-categorisation rule${affected.length === 1 ? "" : "s"} pointing at "${node.name}"`
           );
         }
       }
     },
-    [projects, stored, categoryDefs, rules, persistTxns, persistDefs, persistProjects, persistRules]
+    [tree, nodes, rules, persistNodes, persistRules]
   );
 
-  const deleteProject = useCallback(
-    (id: string) => {
-      persistProjects(projects.filter((p) => p.id !== id));
+  const deleteNode = useCallback(
+    (id: string): number => {
+      const node = tree.byId.get(id);
+      if (!node || id === UNCATEGORIZED_ID) return 0;
+      const parentId = node.parentId && tree.byId.has(node.parentId) ? node.parentId : null;
+      const txnTarget = parentId ?? UNCATEGORIZED_ID;
+      let count = 0;
+      persistTxns(
+        stored.map((t) => {
+          if (t.categoryId !== id) return t;
+          count++;
+          return { ...t, categoryId: txnTarget };
+        })
+      );
+      persistNodes(
+        nodes
+          .filter((n) => n.id !== id)
+          .map((n) => (n.parentId === id ? { ...n, parentId } : n))
+      );
+      if (parentId) {
+        persistRules(rules.map((r) => (r.categoryId === id ? { ...r, categoryId: parentId } : r)));
+      } else {
+        persistRules(rules.filter((r) => r.categoryId !== id));
+      }
+      return count;
     },
-    [projects, persistProjects]
+    [tree, stored, nodes, rules, persistTxns, persistNodes, persistRules]
+  );
+
+  // ---------- Category resolution (import flows) ----------
+  const resolveCategory = useCallback(
+    (nameOrPath: string): string | undefined => {
+      const needle = nameOrPath.trim().toLowerCase();
+      if (!needle) return undefined;
+      // Exact path match first
+      for (const n of tree.nodes) {
+        if (tree.pathOf(n.id).toLowerCase() === needle) return n.id;
+      }
+      // Unique name match (prefer non-archived)
+      const byName = tree.nodes.filter((n) => n.name.toLowerCase() === needle);
+      const active = byName.filter((n) => !tree.isArchived(n.id));
+      const pool = active.length > 0 ? active : byName;
+      return pool.length === 1 ? pool[0].id : undefined;
+    },
+    [tree]
+  );
+
+  const ensureCategories = useCallback(
+    (nameOrPaths: string[]): Record<string, string> => {
+      const result: Record<string, string> = {};
+      const nextNodes = [...nodes];
+      let cur: CategoryTree = buildTree(nextNodes);
+      for (const nameOrPath of nameOrPaths) {
+        const existing = resolveCategory(nameOrPath);
+        if (existing) {
+          result[nameOrPath] = existing;
+          continue;
+        }
+        // Create the path chain segment by segment
+        const segments = nameOrPath.split(PATH_SEP).map((s) => s.trim()).filter(Boolean);
+        if (segments.length === 0) {
+          result[nameOrPath] = UNCATEGORIZED_ID;
+          continue;
+        }
+        let parentId: string | null = null;
+        for (const seg of segments) {
+          const siblings: CategoryNode[] = cur.children.get(parentId) ?? [];
+          const found = siblings.find((s) => s.name.toLowerCase() === seg.toLowerCase());
+          if (found) {
+            parentId = found.id;
+          } else {
+            const node: CategoryNode = {
+              id: slugForName(seg, cur.byId.keys()),
+              parentId,
+              name: seg,
+              createdAt: new Date().toISOString(),
+            };
+            nextNodes.push(node);
+            parentId = node.id;
+            cur = buildTree(nextNodes);
+          }
+        }
+        result[nameOrPath] = parentId ?? UNCATEGORIZED_ID;
+      }
+      if (nextNodes.length !== nodes.length) persistNodes(nextNodes);
+      return result;
+    },
+    [nodes, resolveCategory, persistNodes]
   );
 
   // ---------- Rules ----------
@@ -1010,28 +1030,19 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
 
   const runRules = useCallback(
     (options: { overwrite?: boolean }) => {
-      const { updated, count, changes } = applyRules(stored, rules, groupOf, options);
+      const { updated, count, changes } = applyRules(
+        stored,
+        rules,
+        (id) => tree.byId.has(id),
+        options
+      );
       if (count > 0) {
         const byId = new Map(updated.map((t) => [t.id, t]));
         persistTxns(stored.map((t) => byId.get(t.id) ?? t));
       }
       return { count, changes };
     },
-    [stored, rules, groupOf, persistTxns]
-  );
-
-  const revertCategories = useCallback(
-    (items: Array<{ id: string; category: string }>) => {
-      const byId = new Map(items.map((i) => [i.id, i.category]));
-      persistTxns(
-        stored.map((t) => {
-          const cat = byId.get(t.id);
-          if (cat === undefined || cat === t.category) return t;
-          return { ...t, category: cat, group: groupOf(cat) };
-        })
-      );
-    },
-    [stored, groupOf, persistTxns]
+    [stored, rules, tree, persistTxns]
   );
 
   // ---------- Import profiles ----------
@@ -1056,22 +1067,17 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   const replaceAllData = useCallback(
     (data: {
       transactions: StoredTransaction[];
-      categories?: CategoryDef[];
-      projects?: Project[];
+      nodes?: CategoryNode[];
       rules?: Rule[];
       importProfiles?: ImportProfile[];
     }) => {
-      persistTxns(data.transactions);
-      persistDefs(
-        data.categories && data.categories.length > 0
-          ? data.categories
-          : deriveDefs(data.transactions)
-      );
-      persistProjects(data.projects ?? []);
+      const norm = normalizeLoaded(data.transactions, data.nodes ?? []);
+      persistTxns(norm.txns);
+      persistNodes(norm.nodes);
       persistRules(data.rules ?? []);
       persistProfiles(data.importProfiles ?? []);
     },
-    [persistTxns, persistDefs, persistProjects, persistRules, persistProfiles]
+    [persistTxns, persistNodes, persistRules, persistProfiles]
   );
 
   const value: ExpenseContextType = {
@@ -1080,7 +1086,6 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     workspaceStatus: wsStatus,
     workspaceName: wsName,
     workspaceError: wsError,
-    legacyCount,
     chooseWorkspaceFolder,
     reconnectWorkspace,
     disconnectWorkspace,
@@ -1088,40 +1093,41 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     transactions,
     allTransactions,
     storedTransactions: stored,
-    categoryDefs,
-    categoryGroups,
-    groupOf,
-    projects,
-    archivedGroups,
+    nodes,
+    tree,
+    nameOf,
+    pathOf,
+    colorOf,
     rules,
     importProfiles,
     yearScope: effectiveScope,
     setYearScope,
     availableYears,
     scopeLabel,
+    hideOneOffs,
+    setHideOneOffs,
+    hasOneOffSpend,
     totalSpend,
     monthlyData,
-    categoryData,
     groupData,
-    categories,
     groups,
-    allGroups,
-    accounts,
     avgMonthlySpend,
     groupColors,
+    nodeStats,
+    accounts,
     addTransactions,
     updateTransactions,
     deleteTransactions,
     splitTransaction,
     revertCategories,
-    addCategory,
-    renameCategory,
-    setCategoryGroup,
-    deleteCategory,
-    renameGroup,
-    addProject,
-    updateProject,
-    deleteProject,
+    addNode,
+    renameNode,
+    moveNode,
+    setNodeMeta,
+    setNodeArchived,
+    deleteNode,
+    resolveCategory,
+    ensureCategories,
     addRule,
     updateRule,
     deleteRule,

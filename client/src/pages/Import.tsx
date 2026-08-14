@@ -7,7 +7,7 @@
 import { useState, useMemo, useCallback, useRef } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { ColumnMapping, DateFormat, AmountConvention, ImportProfile } from "@/lib/types";
-import { UNCATEGORIZED } from "@/lib/types";
+import { UNCATEGORIZED_ID } from "@/lib/tree";
 import {
   parseCsvFile, detectMapping, detectDateFormat, buildCandidates, dedupKey,
   type ParsedCsv, type ImportCandidate, type RowError,
@@ -30,14 +30,15 @@ const FIELD_LABELS: Array<{ key: keyof ColumnMapping; label: string; required?: 
   { key: "description", label: "Description", required: true },
   { key: "amount", label: "Amount / Debit", required: true },
   { key: "credit", label: "Credit (if separate)" },
-  { key: "category", label: "Category" },
-  { key: "group", label: "Group" },
+  { key: "category", label: "Category (name or path)" },
+  { key: "categoryId", label: "Category Id (app exports)" },
   { key: "notes", label: "Notes" },
 ];
 
 export default function Import() {
   const {
-    loading, storedTransactions, rules, importProfiles, groupOf,
+    loading, storedTransactions, rules, importProfiles, tree, nameOf, pathOf,
+    resolveCategory, ensureCategories,
     addTransactions, saveImportProfile, deleteImportProfile,
   } = useExpenses();
   const [, navigate] = useLocation();
@@ -104,7 +105,9 @@ export default function Import() {
         .map((r) => parseFloat(String(r[detected.amount] ?? "").replace(/[$,\s]/g, "")))
         .filter((n) => !isNaN(n));
       const negatives = amounts.filter((n) => n < 0).length;
-      const isOwnExport = result.header.includes("ID") && result.header.includes("Group");
+      const isOwnExport =
+        result.header.includes("ID") &&
+        (result.header.includes("CategoryId") || result.header.includes("Group"));
       setConvention(
         detected.credit !== undefined ? "debitCredit"
         : isOwnExport || negatives < amounts.length * 0.3 ? "positiveIsExpense"
@@ -127,31 +130,34 @@ export default function Import() {
 
   const { candidates, errors } = useMemo(() => {
     if (!parsed) return { candidates: [] as ImportCandidate[], errors: [] as RowError[] };
-    return buildCandidates(parsed.rows, mapping, dateFormat, convention, account, existingKeys, fxRate);
-  }, [parsed, mapping, dateFormat, convention, account, existingKeys, fxRate]);
+    return buildCandidates(
+      parsed.rows, mapping, dateFormat, convention, account, existingKeys,
+      resolveCategory, (id) => tree.byId.has(id), fxRate
+    );
+  }, [parsed, mapping, dateFormat, convention, account, existingKeys, resolveCategory, tree, fxRate]);
 
   // Whole-import category + rule-based categorisation preview.
   // rulePatternById records which rule categorised each row, for the preview.
   const { categorised, rulePatternById } = useMemo(() => {
     let txns = candidates.map((c) => c.txn);
     if (importCategory) {
-      txns = txns.map((t) => ({ ...t, category: importCategory, group: groupOf(importCategory) }));
+      txns = txns.map((t) => ({ ...t, categoryId: importCategory }));
     }
     if (!useRules || rules.length === 0) return { categorised: txns, rulePatternById: new Map<string, string>() };
-    const { updated, changes } = applyRules(txns, rules, groupOf, {});
+    const { updated, changes } = applyRules(txns, rules, (id) => tree.byId.has(id), {});
     const byId = new Map(updated.map((t) => [t.id, t]));
     return {
       categorised: txns.map((t) => byId.get(t.id) ?? t),
       rulePatternById: new Map(changes.map((c) => [c.id, c.pattern])),
     };
-  }, [candidates, importCategory, useRules, rules, groupOf]);
+  }, [candidates, importCategory, useRules, rules, tree]);
 
   const newCount = candidates.filter((c) => !c.duplicate).length;
   const dupCount = candidates.length - newCount;
   const ruleHits = useMemo(
     () =>
       categorised.filter(
-        (t, i) => t.category !== UNCATEGORIZED && candidates[i]?.txn.category === UNCATEGORIZED && !importCategory
+        (t, i) => t.categoryId !== UNCATEGORIZED_ID && candidates[i]?.txn.categoryId === UNCATEGORIZED_ID && !importCategory
       ).length,
     [categorised, candidates, importCategory]
   );
@@ -165,10 +171,30 @@ export default function Import() {
   );
 
   const doImport = () => {
-    const toImport = categorised.filter((_, i) => includeDuplicates || !candidates[i].duplicate);
+    let toImport = categorised.filter((_, i) => includeDuplicates || !candidates[i].duplicate);
     if (toImport.length === 0) {
       toast.error("Nothing new to import");
       return;
+    }
+    // Source-file category names that didn't match the tree: create them now
+    // (skipped for rows a rule or the whole-import category already filed)
+    const included = candidates.filter((c) => includeDuplicates || !c.duplicate);
+    const unresolved = Array.from(
+      new Set(
+        included
+          .filter((c, i) => c.unresolvedCategory && toImport[i].categoryId === UNCATEGORIZED_ID)
+          .map((c) => c.unresolvedCategory!)
+      )
+    );
+    if (unresolved.length > 0) {
+      const created = ensureCategories(unresolved);
+      toImport = toImport.map((t, i) => {
+        const name = included[i].unresolvedCategory;
+        if (name && t.categoryId === UNCATEGORIZED_ID && created[name]) {
+          return { ...t, categoryId: created[name] };
+        }
+        return t;
+      });
     }
     addTransactions(toImport);
     if (profileName.trim()) {
@@ -185,7 +211,7 @@ export default function Import() {
       });
     }
     toast.success(`Imported ${toImport.length} transactions`);
-    const uncat = toImport.filter((t) => t.category === UNCATEGORIZED).length;
+    const uncat = toImport.filter((t) => t.categoryId === UNCATEGORIZED_ID).length;
     reset();
     navigate(uncat > 0 ? "/transactions?uncategorized=1" : "/transactions");
   };
@@ -579,23 +605,26 @@ export default function Import() {
                           {dup && (
                             <div className="text-[10px] text-sandstone truncate">
                               {existing
-                                ? `matches existing: ${existing.date} · ${formatCurrency(existing.amount)} · ${existing.category}${existing.account ? ` · ${existing.account}` : ""}`
+                                ? `matches existing: ${existing.date} · ${formatCurrency(existing.amount)} · ${nameOf(existing.categoryId)}${existing.account ? ` · ${existing.account}` : ""}`
                                 : "appears twice in this file"}
                             </div>
                           )}
                         </td>
-                        <td className={cn("px-3 py-1.5 whitespace-nowrap align-top", t.category === UNCATEGORIZED ? "text-terracotta" : "")}>
+                        <td className={cn("px-3 py-1.5 whitespace-nowrap align-top", t.categoryId === UNCATEGORIZED_ID ? "text-terracotta" : "")}>
                           {rulePattern && (
                             <Wand2
                               className="w-3 h-3 inline-block mr-1 text-ocean"
                               aria-label={`Categorised by rule "${rulePattern}"`}
                             />
                           )}
-                          <span title={rulePattern ? `Categorised by rule "${rulePattern}"` : undefined}>
-                            {t.category}
-                          </span>
-                          {t.category !== UNCATEGORIZED && (
-                            <span className="text-muted-foreground ml-1">({groupOf(t.category)})</span>
+                          {candidates[i].unresolvedCategory && t.categoryId === UNCATEGORIZED_ID ? (
+                            <span className="text-ocean" title="This category isn't in the tree yet — it'll be created on import">
+                              + {candidates[i].unresolvedCategory}
+                            </span>
+                          ) : (
+                            <span title={rulePattern ? `Categorised by rule "${rulePattern}"` : pathOf(t.categoryId)}>
+                              {nameOf(t.categoryId)}
+                            </span>
                           )}
                         </td>
                         <td className={cn("px-3 py-1.5 text-right whitespace-nowrap tabular-nums font-medium align-top", t.amount < 0 && "text-eucalyptus")}>
