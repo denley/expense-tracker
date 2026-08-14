@@ -12,7 +12,7 @@ import StatCard from "@/components/StatCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import TransactionEditDialog from "@/components/TransactionEditDialog";
-import { CategoryPicker } from "@/components/pickers";
+import { CategoryPicker, CategoryTreeDropdown } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatPercent, formatDate } from "@/lib/utils";
 import { CHART_HEX_COLORS, type Transaction, type CategoryNode } from "@/lib/types";
 import { Tags, Hash, TrendingUp, ArrowUpDown, Search, Settings2, PencilLine, ExternalLink, ChevronRight } from "lucide-react";
@@ -275,30 +275,15 @@ export default function Categories() {
               </button>
             </div>
           </div>
-          <select
+          <CategoryTreeDropdown
             value={selection}
-            onChange={(e) => {
-              setSelection(e.target.value);
+            onChange={(id) => {
+              setSelection(id);
               setSearchTerm("");
             }}
-            className="w-full bg-background border border-border rounded-lg px-3 py-2.5 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-            title="Jump to any category"
-          >
-            <option value="">
-              All Categories — {formatCurrency(grandTotal)} ({transactions.length} transactions)
-            </option>
-            {tree.nodes.map((n) => {
-              const s = nodeStats.get(n.id);
-              return (
-                <option key={n.id} value={n.id}>
-                  {" ".repeat(tree.depthOf(n.id))}
-                  {n.name}
-                  {n.oneOff ? " ◈" : ""}
-                  {s && s.count > 0 ? ` — ${formatCurrency(s.total)} (${s.count})` : ""}
-                </option>
-              );
-            })}
-          </select>
+            allLabel="All Categories"
+            allDetail={`${formatCurrency(grandTotal)} · ${transactions.length} transactions`}
+          />
         </div>
       </motion.div>
 

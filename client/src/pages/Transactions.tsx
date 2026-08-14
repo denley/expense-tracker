@@ -13,7 +13,7 @@ import TransactionEditDialog from "@/components/TransactionEditDialog";
 import SplitTransactionDialog from "@/components/SplitTransactionDialog";
 import RuleQuickDialog from "@/components/RuleQuickDialog";
 import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
-import { CategoryPicker } from "@/components/pickers";
+import { CategoryPicker, CategoryTreeDropdown } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatDate } from "@/lib/utils";
 import { transactionsToPortableCsv, downloadFile } from "@/lib/export";
 import { dedupKey } from "@/lib/csv";
@@ -317,14 +317,12 @@ export default function Transactions() {
               className="w-full pl-8 pr-3 py-2 text-xs bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </div>
-          <select value={category} onChange={(e) => setCategory(e.target.value)} className={selectCls} title="Includes subcategories">
-            <option value="">All categories</option>
-            {tree.nodes.map((n) => (
-              <option key={n.id} value={n.id}>
-                {" ".repeat(tree.depthOf(n.id))}{n.name}
-              </option>
-            ))}
-          </select>
+          <CategoryTreeDropdown
+            value={category}
+            onChange={setCategory}
+            allLabel="All categories"
+            className="w-auto min-w-[180px] max-w-[280px] !py-2 !text-xs"
+          />
           {accounts.length > 0 && (
             <select value={account} onChange={(e) => setAccount(e.target.value)} className={selectCls}>
               <option value="">All accounts</option>
