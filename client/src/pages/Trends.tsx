@@ -26,7 +26,7 @@ import type { Transaction } from "@/lib/types";
 const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-trends-2xQXBkMzyXx66hXLnF7Eio.webp";
 
 export default function Trends() {
-  const { transactions, loading, monthlyData, groupData, avgMonthlySpend, groupColors } = useExpenses();
+  const { loading, monthlyData, groupData, avgMonthlySpend, groupColors, analysisTransactions } = useExpenses();
   const [, navigate] = useLocation();
   const [selectedMerchant, setSelectedMerchant] = useState<string | null>(null);
   const [merchantSortField, setMerchantSortField] = useState<"date" | "amount">("date");
@@ -67,16 +67,16 @@ export default function Trends() {
 
   // Top 10 biggest transactions
   const biggestTransactions = useMemo(
-    () => [...transactions]
+    () => [...analysisTransactions]
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 10),
-    [transactions]
+    [analysisTransactions]
   );
 
   // Recurring merchant detection — use notes as merchant key (cleaner names)
   const recurringMerchants = useMemo(() => {
     const merchantMap = new Map<string, { months: Set<string>; total: number; count: number; category: string; matchKey: string }>();
-    for (const t of transactions) {
+    for (const t of analysisTransactions) {
       const key = t.notes || t.description;
       const cleanKey = key.length > 50 ? key.substring(0, 50) : key;
       if (!merchantMap.has(cleanKey)) {
@@ -100,12 +100,12 @@ export default function Trends() {
         matchKey: data.matchKey,
       }))
       .sort((a, b) => b.monthsActive - a.monthsActive || b.total - a.total);
-  }, [transactions]);
+  }, [analysisTransactions]);
 
   // Get transactions for a selected merchant
   const merchantTransactions = useMemo(() => {
     if (!selectedMerchant) return [];
-    const txns = transactions.filter((t) => {
+    const txns = analysisTransactions.filter((t) => {
       const key = t.notes || t.description;
       const cleanKey = key.length > 50 ? key.substring(0, 50) : key;
       return cleanKey === selectedMerchant;
@@ -118,7 +118,7 @@ export default function Trends() {
       }
       return merchantSortDir === "desc" ? b.amount - a.amount : a.amount - b.amount;
     });
-  }, [transactions, selectedMerchant, merchantSortField, merchantSortDir]);
+  }, [analysisTransactions, selectedMerchant, merchantSortField, merchantSortDir]);
 
   const merchantTotal = useMemo(
     () => merchantTransactions.reduce((s, t) => s + t.amount, 0),

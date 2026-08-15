@@ -4,6 +4,10 @@
   children (plus a "(general)" row for spend filed directly on the node), and
   clicking a row re-roots the view. Breadcrumb navigates back up.
   Reads ?category=<nodeId> from URL search params for cross-page navigation.
+
+  The global "hide one-offs" toggle applies here too, with one exception: once
+  you drill into a one-off subtree it shows in full, otherwise the page you
+  navigated to would be empty.
 */
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
@@ -27,9 +31,12 @@ import { useLocation } from "wouter";
 
 const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-categories-nKaX5EdJLEgSi5mB7M9UuF.webp";
 
+const PAGE_SIZE = 50;
+
 export default function Categories() {
   const {
     transactions, loading, tree, nodeStats, colorOf, nameOf, updateTransactions,
+    hideOneOffs, analysisTransactions, analysisNodeStats,
   } = useExpenses();
   /** Current node id, or "" for the top level ("all") */
   const [selection, setSelection] = useState("");
@@ -38,6 +45,7 @@ export default function Categories() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [manageOpen, setManageOpen] = useState(false);
   const [editTxn, setEditTxn] = useState<Transaction | null>(null);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [location, navigate] = useLocation();
 
   // Read URL search params for cross-page navigation
@@ -52,6 +60,11 @@ export default function Categories() {
 
   const node = selection ? tree.byId.get(selection) : undefined;
 
+  /** Hide one-off subtrees, unless we're already inside one */
+  const excludeOneOffs = hideOneOffs && !(selection && tree.isOneOff(selection));
+  const baseTransactions = excludeOneOffs ? analysisTransactions : transactions;
+  const stats = excludeOneOffs ? analysisNodeStats : nodeStats;
+
   // Breadcrumb: ancestors from the root down to the current node
   const breadcrumb = useMemo(() => {
     const chain: CategoryNode[] = [];
@@ -64,14 +77,14 @@ export default function Categories() {
   }, [node, tree]);
 
   const selectionTransactions = useMemo(() => {
-    if (!selection) return transactions;
+    if (!selection) return baseTransactions;
     const subtree = tree.subtreeIds(selection);
-    return transactions.filter((t) => subtree.has(t.categoryId));
-  }, [transactions, selection, tree]);
+    return baseTransactions.filter((t) => subtree.has(t.categoryId));
+  }, [baseTransactions, selection, tree]);
 
   const grandTotal = useMemo(
-    () => transactions.reduce((s, t) => s + t.amount, 0),
-    [transactions]
+    () => baseTransactions.reduce((s, t) => s + t.amount, 0),
+    [baseTransactions]
   );
 
   const selectionStats = useMemo(() => {
@@ -94,14 +107,14 @@ export default function Categories() {
     const children = tree.children.get(selection || null) ?? [];
     const rows = children
       .map((c) => {
-        const s = nodeStats.get(c.id);
+        const s = stats.get(c.id);
         return s && s.count > 0
           ? { id: c.id, name: c.name, oneOff: !!c.oneOff, total: s.total, count: s.count, drillable: true }
           : null;
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
     if (selection) {
-      const s = nodeStats.get(selection);
+      const s = stats.get(selection);
       if (s && s.directCount > 0 && rows.length > 0) {
         rows.push({
           id: selection,
@@ -114,7 +127,7 @@ export default function Categories() {
       }
     }
     return rows.sort((a, b) => b.total - a.total);
-  }, [tree, selection, nodeStats, node]);
+  }, [tree, selection, stats, node]);
 
   const filteredTransactions = useMemo(() => {
     let filtered = selectionTransactions;
@@ -136,6 +149,9 @@ export default function Categories() {
       return sortDir === "desc" ? b.amount - a.amount : a.amount - b.amount;
     });
   }, [selectionTransactions, searchTerm, sortField, sortDir]);
+
+  // Back to the first page whenever the underlying list changes
+  useEffect(() => setVisibleCount(PAGE_SIZE), [selection, searchTerm, excludeOneOffs]);
 
   // Monthly trend for the selection (rolled up over the subtree)
   const monthlyTrend = useMemo(() => {
@@ -544,7 +560,7 @@ export default function Categories() {
                 </tr>
               </thead>
               <tbody>
-                {filteredTransactions.slice(0, 50).map((t) => (
+                {filteredTransactions.slice(0, visibleCount).map((t) => (
                   <tr
                     key={t.id}
                     className="border-b border-border/50 hover:bg-accent/50 transition-colors"
@@ -585,10 +601,15 @@ export default function Categories() {
                 ))}
               </tbody>
             </table>
-            {filteredTransactions.length > 50 && (
-              <p className="text-xs text-muted-foreground text-center py-3">
-                Showing 50 of {filteredTransactions.length} transactions
-              </p>
+            {filteredTransactions.length > visibleCount && (
+              <div className="p-3 text-center border-t border-border">
+                <button
+                  onClick={() => setVisibleCount(visibleCount + PAGE_SIZE)}
+                  className="px-4 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
+                >
+                  Show more ({filteredTransactions.length - visibleCount} remaining)
+                </button>
+              </div>
             )}
           </div>
         </ChartCard>

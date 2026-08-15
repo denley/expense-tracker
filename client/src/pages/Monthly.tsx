@@ -26,7 +26,7 @@ import { useLocation } from "wouter";
 const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-monthly-6DPs6bdQN45W6sqfwd4qms.webp";
 
 export default function Monthly() {
-  const { transactions, loading, monthlyData, avgMonthlySpend, groupColors, nameOf } = useExpenses();
+  const { loading, monthlyData, avgMonthlySpend, groupColors, nameOf, analysisTransactions } = useExpenses();
   const [selectedMonth, setSelectedMonth] = useState<string>("");
   const [location, navigate] = useLocation();
 
@@ -46,12 +46,13 @@ export default function Monthly() {
     [monthlyData, activeMonth]
   );
 
+  // Filtered list, so the row count matches the month totals from monthlyData
   const monthTransactions = useMemo(
-    () => transactions.filter((t) => {
+    () => analysisTransactions.filter((t) => {
       const key = `${t.date.getFullYear()}-${String(t.date.getMonth() + 1).padStart(2, "0")}`;
       return key === activeMonth;
     }),
-    [transactions, activeMonth]
+    [analysisTransactions, activeMonth]
   );
 
   const vsAverage = useMemo(() => {

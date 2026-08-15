@@ -138,6 +138,10 @@ interface ExpenseContextType {
 
   // Per-node aggregates (scoped; NOT filtered by hideOneOffs — used by drill-down)
   nodeStats: Map<string, NodeStats>;
+  /** Scoped transactions with one-off subtrees removed when the toggle is on */
+  analysisTransactions: Transaction[];
+  /** nodeStats over analysisTransactions (identical to nodeStats when the toggle is off) */
+  analysisNodeStats: Map<string, NodeStats>;
 
   accounts: string[];
 
@@ -703,14 +707,19 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   /** All-nodes aggregates for the drill-down view (not filtered by hideOneOffs) */
   const nodeStats = useMemo(() => statsOver(transactions), [transactions, statsOver]);
 
+  /** Same rollup with one-off subtrees dropped when the toggle is on */
+  const analysisNodeStats = useMemo(
+    () => (hideOneOffs ? statsOver(analysisTransactions) : nodeStats),
+    [hideOneOffs, statsOver, analysisTransactions, nodeStats]
+  );
+
   /** Root buckets for the overview charts (respects hideOneOffs) */
   const groupData = useMemo(() => {
-    const stats = hideOneOffs ? statsOver(analysisTransactions) : nodeStats;
     const roots = (tree.children.get(null) ?? [])
-      .map((n) => stats.get(n.id))
+      .map((n) => analysisNodeStats.get(n.id))
       .filter((s): s is NodeStats => !!s && s.count > 0);
     return roots.sort((a, b) => b.total - a.total);
-  }, [tree, nodeStats, statsOver, analysisTransactions, hideOneOffs]);
+  }, [tree, analysisNodeStats]);
 
   const groups = useMemo(() => groupData.map((g) => g.name), [groupData]);
 
@@ -1114,6 +1123,8 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     avgMonthlySpend,
     groupColors,
     nodeStats,
+    analysisTransactions,
+    analysisNodeStats,
     accounts,
     addTransactions,
     updateTransactions,

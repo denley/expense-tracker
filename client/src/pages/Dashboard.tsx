@@ -33,7 +33,7 @@ export default function Dashboard() {
   const {
     transactions, loading, totalSpend, monthlyData, groupData,
     avgMonthlySpend, yearScope, scopeLabel, allTransactions, groupColors,
-    nameOf,
+    nameOf, analysisTransactions,
   } = useExpenses();
   const [, navigate] = useLocation();
 
@@ -64,12 +64,12 @@ export default function Dashboard() {
   );
 
   const dailyAvg = useMemo(() => {
-    if (transactions.length === 0) return 0;
-    const first = transactions[0].date.getTime();
-    const last = transactions[transactions.length - 1].date.getTime();
+    if (analysisTransactions.length === 0) return 0;
+    const first = analysisTransactions[0].date.getTime();
+    const last = analysisTransactions[analysisTransactions.length - 1].date.getTime();
     const days = Math.max(1, Math.round((last - first) / 86400000) + 1);
     return totalSpend / days;
-  }, [totalSpend, transactions]);
+  }, [totalSpend, analysisTransactions]);
 
   // With a single year of data, "all time" is just that year — label it as such
   const years = useMemo(() => {
@@ -214,7 +214,7 @@ export default function Dashboard() {
             {heroLabel} Spending Overview
           </h2>
           <p className="text-white/70 text-sm mt-2 max-w-md">
-            {transactions.length} transactions across {categoryTotals.length} categories,
+            {analysisTransactions.length} transactions across {categoryTotals.length} categories,
             totalling {formatCurrency(totalSpend)}.
           </p>
         </div>
@@ -241,8 +241,12 @@ export default function Dashboard() {
         />
         <StatCard
           label="Transactions"
-          value={transactions.length.toString()}
-          subtitle={`Avg ${formatCurrencyExact(totalSpend / transactions.length)} each`}
+          value={analysisTransactions.length.toString()}
+          subtitle={
+            analysisTransactions.length > 0
+              ? `Avg ${formatCurrencyExact(totalSpend / analysisTransactions.length)} each`
+              : undefined
+          }
           icon={<Receipt className="w-4 h-4" />}
         />
         <StatCard
