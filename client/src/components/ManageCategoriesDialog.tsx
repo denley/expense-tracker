@@ -22,6 +22,7 @@ import { formatCurrency } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import {
   PencilLine, Check, X, Trash2, Archive, ArchiveRestore, Plus, CornerDownRight,
+  GripVertical,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -44,6 +45,15 @@ export default function ManageCategoriesDialog({ open, onOpenChange }: Props) {
   const [newName, setNewName] = useState("");
   const [newParent, setNewParent] = useState("");
   const [newOneOff, setNewOneOff] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  /** Current drop target: a node id, "" for the top-level strip, null for none */
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  // A node can't be dropped into its own subtree
+  const dragInvalid = useMemo(
+    () => (draggingId ? tree.subtreeIds(draggingId) : null),
+    [draggingId, tree]
+  );
 
   // Stats across ALL data (management is global, not year-scoped), rolled up.
   const stats = useMemo(() => {
@@ -94,21 +104,44 @@ export default function ManageCategoriesDialog({ open, onOpenChange }: Props) {
     setAdding(false);
   };
 
+  const handleDrop = (targetId: string | null) => {
+    if (!draggingId) return;
+    const node = tree.byId.get(draggingId);
+    setDraggingId(null);
+    setDropTarget(null);
+    if (!node || (node.parentId ?? null) === targetId) return;
+    if (moveNode(draggingId, targetId)) {
+      toast.success(
+        targetId
+          ? `Moved "${node.name}" under "${tree.byId.get(targetId)?.name}"`
+          : `Moved "${node.name}" to the top level`
+      );
+    }
+  };
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[720px] max-h-[85vh] flex flex-col">
-          <DialogHeader>
+        <DialogContent
+          className="sm:max-w-[720px] max-h-[85vh] flex flex-col"
+          // Clicks inside the stacked delete-confirmation alert register as
+          // "outside" this dialog and would dismiss it along with the alert.
+          onInteractOutside={(e) => {
+            if (deleteTarget) e.preventDefault();
+          }}
+        >
+          <DialogHeader className="shrink-0">
             <DialogTitle>Manage Categories</DialogTitle>
             <DialogDescription>
               The tree can nest to any depth, and transactions can be filed at any level.
+              Drag ⋮⋮ to move a category (with its subtree) under another one.
               Mark a one-off cost centre (a trip, a renovation…) with ◈ — its subtree
               clusters at the end of pickers and can be hidden from trend charts.
               Tree changes never rewrite your transaction history. Totals include subcategories.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 shrink-0">
             {adding ? (
               <div className="flex flex-1 items-center gap-1.5">
                 <input
@@ -154,6 +187,29 @@ export default function ManageCategoriesDialog({ open, onOpenChange }: Props) {
             )}
           </div>
 
+          {draggingId && (tree.byId.get(draggingId)?.parentId ?? null) !== null && (
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                if (dropTarget !== "") setDropTarget("");
+              }}
+              onDragLeave={() => setDropTarget((t) => (t === "" ? null : t))}
+              onDrop={(e) => {
+                e.preventDefault();
+                handleDrop(null);
+              }}
+              className={cn(
+                "shrink-0 rounded-lg border border-dashed px-3 py-1.5 text-xs text-center",
+                dropTarget === ""
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground"
+              )}
+            >
+              Drop here to make it a top-level category
+            </div>
+          )}
+
           <div className="flex-1 min-h-0 overflow-y-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-card z-10">
@@ -170,16 +226,60 @@ export default function ManageCategoriesDialog({ open, onOpenChange }: Props) {
                   const s = stats.get(n.id);
                   const archived = tree.isArchived(n.id);
                   const selfArchived = !!n.archived;
+                  // Valid drop target: not in the dragged node's own subtree, not
+                  // its current parent, and not archived (matching ParentPicker).
+                  const validTarget =
+                    draggingId !== null &&
+                    !dragInvalid?.has(n.id) &&
+                    (tree.byId.get(draggingId)?.parentId ?? null) !== n.id &&
+                    !archived;
                   return (
                     <tr
                       key={n.id}
+                      onDragOver={(e) => {
+                        if (!validTarget) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        if (dropTarget !== n.id) setDropTarget(n.id);
+                      }}
+                      onDragLeave={() => setDropTarget((t) => (t === n.id ? null : t))}
+                      onDrop={(e) => {
+                        if (!validTarget) return;
+                        e.preventDefault();
+                        handleDrop(n.id);
+                      }}
                       className={cn(
                         "border-b border-border/50 hover:bg-accent/40",
-                        archived && "opacity-50"
+                        archived && "opacity-50",
+                        draggingId === n.id && "opacity-30",
+                        dropTarget === n.id && "bg-primary/10"
                       )}
                     >
                       <td className="py-1.5 pr-2">
                         <div className="flex items-center gap-1.5" style={{ paddingLeft: depth * 16 }}>
+                          {n.id !== UNCATEGORIZED_ID ? (
+                            <span
+                              draggable
+                              onDragStart={(e) => {
+                                e.dataTransfer.setData("text/plain", n.id);
+                                e.dataTransfer.effectAllowed = "move";
+                                const row = e.currentTarget.closest("tr");
+                                if (row) e.dataTransfer.setDragImage(row, 16, 12);
+                                // Defer: DOM changes during dragstart cancel the drag in Chrome
+                                setTimeout(() => setDraggingId(n.id), 0);
+                              }}
+                              onDragEnd={() => {
+                                setDraggingId(null);
+                                setDropTarget(null);
+                              }}
+                              className="cursor-grab text-muted-foreground/40 hover:text-muted-foreground shrink-0 -ml-1"
+                              title="Drag onto another category to nest it there"
+                            >
+                              <GripVertical className="w-3 h-3" />
+                            </span>
+                          ) : (
+                            <span className="w-3 shrink-0 -ml-1" />
+                          )}
                           {depth > 0 && (
                             <CornerDownRight className="w-3 h-3 text-muted-foreground/50 shrink-0" />
                           )}
@@ -314,7 +414,9 @@ export default function ManageCategoriesDialog({ open, onOpenChange }: Props) {
 
       {/* Delete node confirmation */}
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <AlertDialogContent>
+        {/* The row that opened this alert is gone after a delete; letting Radix
+            restore focus to it dismisses the manage dialog underneath. */}
+        <AlertDialogContent onCloseAutoFocus={(e) => e.preventDefault()}>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete category "{deleteTarget?.name}"?</AlertDialogTitle>
             <AlertDialogDescription>
