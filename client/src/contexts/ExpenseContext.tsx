@@ -196,6 +196,8 @@ interface ExpenseContextType {
   addRule: (r: Omit<Rule, "id" | "createdAt">) => void;
   updateRule: (id: string, patch: Partial<Rule>) => void;
   deleteRule: (id: string) => void;
+  /** Change rule priority: move a rule directly before another (array order = rules.csv order = first-match priority) */
+  moveRuleBefore: (id: string, beforeId: string) => void;
   runRules: (options: { overwrite?: boolean }) => { count: number; changes: RuleChange[] };
 
   // Import profiles
@@ -1037,6 +1039,19 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     [rules, persistRules]
   );
 
+  const moveRuleBefore = useCallback(
+    (id: string, beforeId: string) => {
+      if (id === beforeId) return;
+      const rule = rules.find((r) => r.id === id);
+      if (!rule) return;
+      const rest = rules.filter((r) => r.id !== id);
+      const at = rest.findIndex((r) => r.id === beforeId);
+      if (at < 0) return;
+      persistRules([...rest.slice(0, at), rule, ...rest.slice(at)]);
+    },
+    [rules, persistRules]
+  );
+
   const runRules = useCallback(
     (options: { overwrite?: boolean }) => {
       const { updated, count, changes } = applyRules(
@@ -1142,6 +1157,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     addRule,
     updateRule,
     deleteRule,
+    moveRuleBefore,
     runRules,
     saveImportProfile,
     deleteImportProfile,

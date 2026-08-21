@@ -1,6 +1,7 @@
 /*
-  Create an auto-categorisation rule from a single transaction:
-  - editable match pattern (pre-filled with the normalized merchant name)
+  Create or edit an auto-categorisation rule:
+  - editable match pattern (pre-filled with the normalized merchant name, or the
+    rule being edited), with an optional regex mode
   - category to assign
   - live preview of every transaction the pattern matches, split into
     uncategorised / already this category / categorised differently
@@ -13,8 +14,10 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { CategoryPicker, inputCls } from "@/components/pickers";
+import { ruleMatches } from "@/lib/rules";
+import type { Rule } from "@/lib/types";
 import { formatCurrencyExact, formatDate } from "@/lib/utils";
-import { Wand2, AlertTriangle } from "lucide-react";
+import { Wand2, Pencil, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -25,29 +28,43 @@ interface Props {
   seedPattern: string;
   /** Pre-selected category node id ("" = none yet) */
   seedCategoryId: string;
+  /** When set, the dialog edits this rule in place instead of creating a new one */
+  editRule?: Rule | null;
 }
 
-export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedCategoryId }: Props) {
-  const { allTransactions, rules, addRule, updateTransactions, nameOf } = useExpenses();
+export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedCategoryId, editRule }: Props) {
+  const { allTransactions, rules, addRule, updateRule, updateTransactions, nameOf } = useExpenses();
   const [pattern, setPattern] = useState("");
   const [categoryId, setCategoryId] = useState("");
+  const [isRegex, setIsRegex] = useState(false);
   const [reassignOthers, setReassignOthers] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setPattern(seedPattern);
-    setCategoryId(seedCategoryId);
+    setPattern(editRule ? editRule.pattern : seedPattern);
+    setCategoryId(editRule ? editRule.categoryId : seedCategoryId);
+    setIsRegex(editRule?.isRegex ?? false);
     setReassignOthers(false);
-  }, [open, seedPattern, seedCategoryId]);
+  }, [open, seedPattern, seedCategoryId, editRule]);
 
   const trimmed = pattern.trim();
   const tooShort = trimmed.length < 3;
 
+  const regexError = useMemo(() => {
+    if (!isRegex || !trimmed) return false;
+    try {
+      new RegExp(trimmed, "i");
+      return false;
+    } catch {
+      return true;
+    }
+  }, [isRegex, trimmed]);
+
   const matches = useMemo(() => {
-    if (tooShort) return [];
-    const q = trimmed.toLowerCase();
-    return allTransactions.filter((t) => t.description.toLowerCase().includes(q));
-  }, [allTransactions, trimmed, tooShort]);
+    if (tooShort || regexError) return [];
+    const probe = { pattern: trimmed, isRegex } as Rule;
+    return allTransactions.filter((t) => ruleMatches(probe, t.description));
+  }, [allTransactions, trimmed, isRegex, tooShort, regexError]);
 
   const uncat = useMemo(() => matches.filter((t) => t.categoryId === UNCATEGORIZED_ID), [matches]);
   const alreadyThis = useMemo(
@@ -59,9 +76,16 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
     [matches, categoryId]
   );
 
-  const existingRule = useMemo(
-    () => rules.find((r) => !r.isRegex && r.pattern.trim().toLowerCase() === trimmed.toLowerCase()),
-    [rules, trimmed]
+  const duplicateRule = useMemo(
+    () =>
+      rules.find(
+        (r) =>
+          r.id !== editRule?.id &&
+          !r.isRegex &&
+          !isRegex &&
+          r.pattern.trim().toLowerCase() === trimmed.toLowerCase()
+      ),
+    [rules, trimmed, isRegex, editRule]
   );
 
   const applyCount = uncat.length + (reassignOthers ? others.length : 0);
@@ -71,11 +95,19 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
       toast.error("Use at least 3 characters so the rule doesn't over-match");
       return;
     }
+    if (regexError) {
+      toast.error("The regular expression is invalid");
+      return;
+    }
     if (!categoryId) {
       toast.error("Pick the category the rule assigns");
       return;
     }
-    addRule({ pattern: trimmed, isRegex: false, categoryId, enabled: true });
+    if (editRule) {
+      updateRule(editRule.id, { pattern: trimmed, isRegex, categoryId });
+    } else {
+      addRule({ pattern: trimmed, isRegex, categoryId, enabled: true });
+    }
     if (applyNow && applyCount > 0) {
       const ids = [...uncat, ...(reassignOthers ? others : [])].map((t) => t.id);
       updateTransactions(ids, { categoryId });
@@ -88,14 +120,24 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
     onOpenChange(false);
   };
 
-  const previewRows = matches.slice(0, 8);
+  // Conflicts first so they're never buried, then uncategorised, then the
+  // already-correct rows; capped only to keep pathological patterns renderable
+  const previewRows = [...others, ...uncat, ...alreadyThis].slice(0, 500);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Wand2 className="w-4 h-4 text-primary" /> Create categorisation rule
+            {editRule ? (
+              <>
+                <Pencil className="w-4 h-4 text-primary" /> Edit categorisation rule
+              </>
+            ) : (
+              <>
+                <Wand2 className="w-4 h-4 text-primary" /> Create categorisation rule
+              </>
+            )}
           </DialogTitle>
           <DialogDescription>
             "Description contains the pattern → assign the category." Applies to future imports,
@@ -107,7 +149,7 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                Description contains
+                Description {isRegex ? "matches regex" : "contains"}
               </label>
               <input
                 autoFocus
@@ -116,6 +158,15 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
                 placeholder='e.g. "WOOLWORTHS"'
                 className={inputCls}
               />
+              <label className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={isRegex}
+                  onChange={(e) => setIsRegex(e.target.checked)}
+                  className="accent-[var(--color-eucalyptus)]"
+                />
+                Regular expression
+              </label>
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">
@@ -125,12 +176,21 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
             </div>
           </div>
 
-          {existingRule && (
+          {regexError && (
             <p className="flex items-center gap-1.5 text-xs text-terracotta">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-              A rule with this exact pattern already exists (→ {nameOf(existingRule.categoryId)}
-              {existingRule.enabled ? "" : ", disabled"}). Saving adds a second one that never
-              wins — edit the existing rule on the Data page instead.
+              Invalid regular expression.
+            </p>
+          )}
+
+          {duplicateRule && (
+            <p className="flex items-center gap-1.5 text-xs text-terracotta">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              A rule with this exact pattern already exists (→ {nameOf(duplicateRule.categoryId)}
+              {duplicateRule.enabled ? "" : ", disabled"}).
+              {editRule
+                ? " Saving keeps both — consider deleting one on the Rules page."
+                : " Saving adds a second one that never wins — edit the existing rule on the Rules page instead."}
             </p>
           )}
 
@@ -163,7 +223,7 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
 
           {previewRows.length > 0 && (
             <div className="border border-border rounded-lg overflow-hidden">
-              <div className="max-h-[180px] overflow-y-auto">
+              <div className="max-h-[240px] overflow-y-auto">
                 <table className="w-full text-xs">
                   <tbody>
                     {previewRows.map((t) => (
@@ -208,7 +268,7 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
             onClick={() => save(false)}
             className="px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent"
           >
-            Save rule only
+            {editRule ? "Save changes" : "Save rule only"}
           </button>
           <button
             onClick={() => save(true)}

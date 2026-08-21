@@ -1,24 +1,20 @@
 /*
-  DESIGN: Scandinavian Analytical — Data & Rules
+  DESIGN: Scandinavian Analytical — Data folder
   The "your data is yours" page:
   - data folder status: reload from disk, switch folder
   - backup snapshots (CSV / JSON download) and JSON restore
-  - auto-categorisation rules manager with suggestions learned from history
   - documentation of the on-disk format for external tools / AI agents
+  (auto-categorisation rules have their own page: /rules)
 */
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import LoadingState from "@/components/LoadingState";
-import { CategoryPicker, inputCls } from "@/components/pickers";
 import {
   transactionsToPortableCsv, makeBackup, parseBackup, downloadFile,
 } from "@/lib/export";
-import { suggestRulesFromHistory, type RuleChange } from "@/lib/rules";
-import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
-import { UNCATEGORIZED_ID } from "@/lib/tree";
 import {
-  Download, DatabaseBackup, Wand2, Plus, Trash2, Bot, FolderOpen, RefreshCw,
-  AlertTriangle, Lightbulb, FileJson, FileSpreadsheet, Power, FolderSync,
+  Download, DatabaseBackup, Bot, FolderOpen, RefreshCw,
+  AlertTriangle, FileJson, FileSpreadsheet, FolderSync,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -26,39 +22,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 
 export default function Data() {
   const {
-    loading, storedTransactions, nodes, tree, nameOf, pathOf, rules, importProfiles,
-    workspaceName, reloadFromDisk, disconnectWorkspace,
-    replaceAllData, addRule, updateRule, deleteRule, runRules,
+    loading, storedTransactions, nodes, tree, rules, importProfiles,
+    workspaceName, reloadFromDisk, disconnectWorkspace, replaceAllData,
   } = useExpenses();
 
   const jsonInput = useRef<HTMLInputElement>(null);
   const [pendingRestore, setPendingRestore] = useState<ReturnType<typeof parseBackup>>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
-  const [confirmOverwriteRules, setConfirmOverwriteRules] = useState(false);
-
-  // New rule form
-  const [rulePattern, setRulePattern] = useState("");
-  const [ruleCategory, setRuleCategory] = useState("");
-
-  // Post-run review of what the rules changed
-  const [ruleRunChanges, setRuleRunChanges] = useState<RuleChange[] | null>(null);
-
-  const suggestions = useMemo(
-    () =>
-      suggestRulesFromHistory(storedTransactions, rules, (id) =>
-        tree.isArchived(id)
-      ).slice(0, 8),
-    [storedTransactions, rules, tree]
-  );
-
-  const uncatCount = useMemo(
-    () => storedTransactions.filter((t) => t.categoryId === UNCATEGORIZED_ID).length,
-    [storedTransactions]
-  );
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -87,25 +60,6 @@ export default function Data() {
     setPendingRestore(backup);
   };
 
-  const saveRule = () => {
-    if (!rulePattern.trim()) {
-      toast.error("Enter a pattern to match");
-      return;
-    }
-    if (!ruleCategory) {
-      toast.error("Pick the category the rule assigns");
-      return;
-    }
-    addRule({
-      pattern: rulePattern.trim(),
-      isRegex: false,
-      categoryId: ruleCategory,
-      enabled: true,
-    });
-    setRulePattern(""); setRuleCategory("");
-    toast.success("Rule added");
-  };
-
   if (loading) return <LoadingState />;
 
   const sectionCls = "bg-card rounded-xl border border-border p-5";
@@ -113,7 +67,7 @@ export default function Data() {
   return (
     <div className="space-y-6 max-w-[980px]">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-        <h2 className="text-2xl font-bold tracking-tight text-foreground">Data & Rules</h2>
+        <h2 className="text-2xl font-bold tracking-tight text-foreground">Data folder</h2>
         <p className="text-sm text-muted-foreground mt-0.5">
           Your data is plain CSV files in a folder you own. The app is just a viewer/editor over them.
         </p>
@@ -240,134 +194,6 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
         />
       </motion.div>
 
-      {/* Rules manager */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.2 }}
-        className={sectionCls}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Wand2 className="w-4 h-4 text-muted-foreground" /> Auto-categorisation rules
-          </h3>
-          {rules.length > 0 && (
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  const { count, changes } = runRules({});
-                  if (count > 0) setRuleRunChanges(changes);
-                  else toast.info("No uncategorised matches");
-                }}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border hover:bg-accent"
-              >
-                Run on {uncatCount} uncategorised
-              </button>
-              <button
-                onClick={() => setConfirmOverwriteRules(true)}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border hover:bg-accent text-muted-foreground"
-              >
-                Re-run on everything
-              </button>
-            </div>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground mb-4">
-          "Description contains X → assign category." The group follows from the category.
-          Rules live in rules.csv, run automatically during CSV import and on demand here.
-          First matching rule wins.
-        </p>
-
-        {/* Add rule */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
-          <input
-            value={rulePattern}
-            onChange={(e) => setRulePattern(e.target.value)}
-            placeholder='Description contains… e.g. "WOOLWORTHS"'
-            className={cn(inputCls, "lg:col-span-2")}
-          />
-          <CategoryPicker
-            value={ruleCategory}
-            onChange={setRuleCategory}
-            allowEmpty
-            emptyLabel="Assign category…"
-          />
-          <button
-            onClick={saveRule}
-            className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90"
-          >
-            <Plus className="w-3.5 h-3.5" /> Add rule
-          </button>
-        </div>
-
-        {/* Rule list */}
-        {rules.length > 0 ? (
-          <div className="space-y-1.5">
-            {rules.map((r) => (
-              <div
-                key={r.id}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2 rounded-lg border border-border/70",
-                  !r.enabled && "opacity-50"
-                )}
-              >
-                <button
-                  onClick={() => updateRule(r.id, { enabled: !r.enabled })}
-                  className={cn("shrink-0", r.enabled ? "text-eucalyptus" : "text-muted-foreground")}
-                  title={r.enabled ? "Disable" : "Enable"}
-                >
-                  <Power className="w-3.5 h-3.5" />
-                </button>
-                <span className="text-xs font-medium truncate">"{r.pattern}"</span>
-                <span className="text-xs text-muted-foreground truncate">
-                  → {pathOf(r.categoryId)}
-                </span>
-                <div className="flex-1" />
-                <button
-                  onClick={() => deleteRule(r.id)}
-                  className="text-muted-foreground hover:text-destructive shrink-0"
-                  title="Delete rule"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground italic">No rules yet.</p>
-        )}
-
-        {/* Suggestions */}
-        {suggestions.length > 0 && (
-          <div className="mt-4 pt-4 border-t border-border">
-            <p className="flex items-center gap-1.5 text-xs font-medium text-foreground mb-2">
-              <Lightbulb className="w-3.5 h-3.5 text-sandstone" />
-              Suggested from your history (merchants that always get the same category)
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {suggestions.map((s) => (
-                <button
-                  key={s.pattern}
-                  onClick={() => {
-                    addRule({
-                      pattern: s.pattern,
-                      isRegex: false,
-                      categoryId: s.categoryId,
-                      enabled: true,
-                    });
-                    toast.success(`Rule added: "${s.pattern}" → ${nameOf(s.categoryId)}`);
-                  }}
-                  className="px-2.5 py-1.5 rounded-full text-[11px] border border-border hover:bg-accent transition-colors"
-                  title={`Seen ${s.count} times`}
-                >
-                  "{s.pattern}" → {nameOf(s.categoryId)}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </motion.div>
-
       {/* Restore confirmation */}
       <AlertDialog open={!!pendingRestore} onOpenChange={(o) => !o && setPendingRestore(null)}>
         <AlertDialogContent>
@@ -396,38 +222,6 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* Re-run rules on everything confirmation */}
-      <AlertDialog open={confirmOverwriteRules} onOpenChange={setConfirmOverwriteRules}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Re-run rules on all transactions?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This overwrites the category of every transaction that matches a rule,
-              including ones you categorised by hand.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const { count, changes } = runRules({ overwrite: true });
-                if (count > 0) setRuleRunChanges(changes);
-                else toast.info("No transactions matched a rule with a different category");
-                setConfirmOverwriteRules(false);
-              }}
-            >
-              Re-run rules
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <RuleRunReviewDialog
-        open={ruleRunChanges !== null}
-        onOpenChange={(o) => !o && setRuleRunChanges(null)}
-        changes={ruleRunChanges ?? []}
-      />
 
       {/* Switch folder confirmation */}
       <AlertDialog open={confirmDisconnect} onOpenChange={setConfirmDisconnect}>

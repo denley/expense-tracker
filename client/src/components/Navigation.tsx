@@ -7,7 +7,7 @@
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Tags, Calendar, TrendingUp, Sun, Moon,
-  ReceiptText, UploadCloud, Database,
+  ReceiptText, UploadCloud, Database, Wand2,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useExpenses } from "@/contexts/ExpenseContext";
@@ -33,7 +33,8 @@ const navSections = [
     title: "Manage",
     items: [
       { path: "/import", label: "Import CSV", icon: UploadCloud },
-      { path: "/data", label: "Data & Rules", icon: Database },
+      { path: "/rules", label: "Rules", icon: Wand2 },
+      { path: "/data", label: "Data folder", icon: Database },
     ],
   },
 ];

@@ -6,7 +6,7 @@
 */
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
-import type { Transaction } from "@/lib/types";
+import type { Rule, Transaction } from "@/lib/types";
 import { UNCATEGORIZED_ID } from "@/lib/tree";
 import LoadingState from "@/components/LoadingState";
 import TransactionEditDialog from "@/components/TransactionEditDialog";
@@ -17,7 +17,7 @@ import { CategoryPicker, CategoryTreeDropdown } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatDate } from "@/lib/utils";
 import { transactionsToPortableCsv, downloadFile } from "@/lib/export";
 import { dedupKey } from "@/lib/csv";
-import { normalizeMerchant, suggestPatternsForUncategorised, type RuleChange } from "@/lib/rules";
+import { normalizeMerchant, ruleMatches, suggestPatternsForUncategorised, type RuleChange } from "@/lib/rules";
 import {
   Search, ArrowUpDown, Plus, X, Trash2, Download, Filter,
   CheckSquare, PencilLine, Wand2, Copy, Lightbulb, Split,
@@ -69,8 +69,8 @@ export default function Transactions() {
   // Split dialog
   const [splitTxn, setSplitTxn] = useState<Transaction | null>(null);
 
-  // Rule-from-transaction dialog
-  const [ruleSeed, setRuleSeed] = useState<{ pattern: string; categoryId: string } | null>(null);
+  // Rule-from-transaction dialog (edits the matching rule when one exists)
+  const [ruleSeed, setRuleSeed] = useState<{ pattern: string; categoryId: string; edit?: Rule } | null>(null);
 
   // Post-"Apply Rules" review
   const [ruleRunChanges, setRuleRunChanges] = useState<RuleChange[] | null>(null);
@@ -519,18 +519,38 @@ export default function Transactions() {
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center">
-                      <button
-                        onClick={() =>
-                          setRuleSeed({
-                            pattern: normalizeMerchant(t.description),
-                            categoryId: t.categoryId === UNCATEGORIZED_ID ? "" : t.categoryId,
-                          })
-                        }
-                        className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-accent transition-colors"
-                        title="Create rule from this transaction"
-                      >
-                        <Wand2 className="w-3.5 h-3.5" />
-                      </button>
+                      {(() => {
+                        const matchingRule = rules.find((r) => r.enabled && ruleMatches(r, t.description));
+                        return (
+                          <button
+                            onClick={() =>
+                              matchingRule
+                                ? setRuleSeed({
+                                    pattern: matchingRule.pattern,
+                                    categoryId: matchingRule.categoryId,
+                                    edit: matchingRule,
+                                  })
+                                : setRuleSeed({
+                                    pattern: normalizeMerchant(t.description),
+                                    categoryId: t.categoryId === UNCATEGORIZED_ID ? "" : t.categoryId,
+                                  })
+                            }
+                            className={cn(
+                              "p-1.5 rounded-md hover:bg-accent transition-colors",
+                              matchingRule
+                                ? "text-primary/60 hover:text-primary"
+                                : "text-muted-foreground hover:text-primary"
+                            )}
+                            title={
+                              matchingRule
+                                ? `Matched by rule "${matchingRule.pattern}" → ${nameOf(matchingRule.categoryId)} — click to edit it`
+                                : "Create rule from this transaction"
+                            }
+                          >
+                            <Wand2 className="w-3.5 h-3.5" />
+                          </button>
+                        );
+                      })()}
                       <button
                         onClick={() => setSplitTxn(t)}
                         className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -660,6 +680,7 @@ export default function Transactions() {
         onOpenChange={(o) => !o && setRuleSeed(null)}
         seedPattern={ruleSeed?.pattern ?? ""}
         seedCategoryId={ruleSeed?.categoryId ?? ""}
+        editRule={ruleSeed?.edit ?? null}
       />
 
       <RuleRunReviewDialog
