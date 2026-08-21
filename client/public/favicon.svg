@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0e8a68" />
+  <!-- House silhouette -->
+  <path
+    d="M32 9 L57 30 L52 35 L52 52 A4 4 0 0 1 48 56 L16 56 A4 4 0 0 1 12 52 L12 35 L7 30 Z"
+    fill="#fdfcfa" />
+  <!-- Bar chart inside the house -->
+  <rect x="18" y="42" width="7" height="9" rx="2" fill="#0e8a68" />
+  <rect x="28.5" y="36" width="7" height="15" rx="2" fill="#0e8a68" />
+  <rect x="39" y="30" width="7" height="21" rx="2" fill="#0e8a68" />
+</svg>
