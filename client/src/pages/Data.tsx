@@ -3,7 +3,6 @@
   The "your data is yours" page:
   - data folder status: reload from disk, switch folder
   - backup snapshots (CSV / JSON download) and JSON restore
-  - documentation of the on-disk format for external tools / AI agents
   (auto-categorisation rules have their own page: /rules)
 */
 import { useRef, useState } from "react";
@@ -13,7 +12,7 @@ import {
   transactionsToPortableCsv, makeBackup, parseBackup, downloadFile,
 } from "@/lib/export";
 import {
-  Download, DatabaseBackup, Bot, FolderOpen, RefreshCw,
+  Download, DatabaseBackup, FolderOpen, RefreshCw,
   AlertTriangle, FileJson, FileSpreadsheet, FolderSync,
 } from "lucide-react";
 import {
@@ -111,39 +110,6 @@ export default function Data() {
         </div>
       </motion.div>
 
-      {/* AI agent format docs */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.1 }}
-        className={sectionCls}
-      >
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-1">
-          <Bot className="w-4 h-4 text-muted-foreground" /> Working with AI agents & other tools
-        </h3>
-        <p className="text-xs text-muted-foreground mb-3">
-          Point any tool straight at the data folder — no export/import loop. Edits show up here
-          automatically when this tab regains focus. The folder's <code className="bg-secondary px-1 rounded">README.md</code>{" "}
-          documents the full schema for agents; the short version:
-        </p>
-        <div className="bg-secondary/50 rounded-lg p-3 overflow-x-auto">
-          <pre className="text-[11px] text-muted-foreground leading-relaxed">{`categories.csv     Id,ParentId,Name,Path,OneOff,Archived,Color,Budget,Notes,CreatedAt
-                   The tree as an adjacency list: ParentId empty = top-level;
-                   arbitrary nesting; names unique among siblings only.
-                   Path is DERIVED — the app rewrites it; structure = ParentId.
-                   OneOff=true marks a project; Archived=true retires a subtree.
-transactions.csv   ID,Date,Description,Amount,CategoryId,Account,Notes
-                   - keep ID unchanged; Date ISO yyyy-mm-dd
-                   - Amount: positive = expense, negative = income/refund
-                   - CategoryId references a categories.csv Id (any level);
-                     "uncategorized" marks rows needing triage
-rules.csv          Pattern,IsRegex,CategoryId,Enabled,CreatedAt — auto-categorisation.
-
-Tree edits only touch categories.csv — transaction history is never rewritten.
-Avoid editing files while actively using the app (writes are last-one-wins).`}</pre>
-        </div>
-      </motion.div>
-
       {/* Backups */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -155,8 +121,7 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
           <Download className="w-4 h-4 text-muted-foreground" /> Backup snapshots
         </h3>
         <p className="text-xs text-muted-foreground mb-4">
-          The folder is the source of truth (put it in git or a synced drive for real safety) —
-          these are point-in-time snapshots you can download and restore.
+          The folder is usable on its own for import/export, or make a snapshot here.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <button
