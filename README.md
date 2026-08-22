@@ -41,6 +41,7 @@ Every transaction has exactly one category, and every category belongs to exactl
 ### Analyse
 - **Dashboard** — KPI cards, monthly trend, group doughnut (projects appear as slices in their own color), top categories, cumulative spend, active project budget snapshot
 - **Categories / Monthly / Trends** — deep-dive pages with interactive cross-navigation
+- **Compare** — any two periods (year, month, or custom range) side by side, with year-over-year presets: totals and per-day averages, aligned month-by-month bars, a cumulative spend race, a per-group delta table with category drill-down, and GitHub-style calendar heatmaps on a shared colour scale
 - **Year scope** — a global selector (all time / per year) once data spans multiple years
 
 ### Own your data

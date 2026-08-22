@@ -7,7 +7,7 @@
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Tags, Calendar, TrendingUp, Sun, Moon,
-  ReceiptText, UploadCloud, Database, Wand2,
+  ReceiptText, UploadCloud, Database, Wand2, ArrowLeftRight,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useExpenses } from "@/contexts/ExpenseContext";
@@ -27,6 +27,7 @@ const navSections = [
       { path: "/categories", label: "Categories", icon: Tags },
       { path: "/monthly", label: "Monthly", icon: Calendar },
       { path: "/trends", label: "Trends", icon: TrendingUp },
+      { path: "/compare", label: "Compare", icon: ArrowLeftRight },
     ],
   },
   {
