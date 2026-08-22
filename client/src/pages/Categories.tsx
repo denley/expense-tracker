@@ -178,7 +178,7 @@ export default function Categories() {
   const topMerchants = useMemo(() => {
     const map = new Map<string, { total: number; count: number }>();
     for (const t of selectionTransactions) {
-      const key = t.notes || t.description;
+      const key = t.description;
       if (!map.has(key)) {
         map.set(key, { total: 0, count: 0 });
       }

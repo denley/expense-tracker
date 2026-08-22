@@ -543,7 +543,7 @@ export default function Transactions() {
                   </td>
                   <td className="px-3 py-2 text-xs text-foreground max-w-[280px]">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="truncate font-medium">{t.notes || t.description}</span>
+                      <span className="truncate font-medium">{t.description}</span>
                       {duplicateIds.has(t.id) && (
                         <span
                           className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sandstone/15 text-sandstone text-[9px] font-semibold uppercase tracking-wide shrink-0"
@@ -554,7 +554,7 @@ export default function Transactions() {
                       )}
                     </div>
                     {t.notes && (
-                      <div className="truncate text-[10px] text-muted-foreground">{t.description}</div>
+                      <div className="truncate text-[10px] text-muted-foreground">{t.notes}</div>
                     )}
                   </td>
                   <td className="px-3 py-2 text-xs hidden md:table-cell whitespace-nowrap">

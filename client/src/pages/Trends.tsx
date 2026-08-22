@@ -73,11 +73,11 @@ export default function Trends() {
     [analysisTransactions]
   );
 
-  // Recurring merchant detection — use notes as merchant key (cleaner names)
+  // Recurring merchant detection — keyed on description
   const recurringMerchants = useMemo(() => {
     const merchantMap = new Map<string, { months: Set<string>; total: number; count: number; category: string; matchKey: string }>();
     for (const t of analysisTransactions) {
-      const key = t.notes || t.description;
+      const key = t.description;
       const cleanKey = key.length > 50 ? key.substring(0, 50) : key;
       if (!merchantMap.has(cleanKey)) {
         merchantMap.set(cleanKey, { months: new Set(), total: 0, count: 0, category: t.category, matchKey: cleanKey });
@@ -106,7 +106,7 @@ export default function Trends() {
   const merchantTransactions = useMemo(() => {
     if (!selectedMerchant) return [];
     const txns = analysisTransactions.filter((t) => {
-      const key = t.notes || t.description;
+      const key = t.description;
       const cleanKey = key.length > 50 ? key.substring(0, 50) : key;
       return cleanKey === selectedMerchant;
     });
