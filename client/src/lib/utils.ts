@@ -43,6 +43,12 @@ export function formatDate(date: Date): string {
   });
 }
 
+/** formatDate for an ISO "yyyy-mm-dd" string (parsed as local, not UTC) */
+export function formatIsoDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return formatDate(new Date(y, m - 1, d));
+}
+
 export function formatMonthYear(monthKey: string): string {
   const [year, month] = monthKey.split("-");
   const date = new Date(parseInt(year), parseInt(month) - 1);

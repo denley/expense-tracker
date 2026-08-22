@@ -31,6 +31,13 @@ import type {
   MonthlyData,
   NodeStats,
 } from "@/lib/types";
+
+export interface AccountCoverage {
+  account: string;
+  from: string;
+  to: string;
+  count: number;
+}
 import { MONTH_LABELS, groupColor } from "@/lib/types";
 import {
   buildTree,
@@ -144,6 +151,8 @@ interface ExpenseContextType {
   analysisNodeStats: Map<string, NodeStats>;
 
   accounts: string[];
+  /** Date range held per account across ALL data (not year-scoped) — tells you what to export next */
+  accountCoverage: AccountCoverage[];
 
   // Transaction actions
   addTransactions: (txns: StoredTransaction[]) => void;
@@ -739,6 +748,22 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     return Array.from(set).sort();
   }, [allTransactions]);
 
+  const accountCoverage = useMemo(() => {
+    const map = new Map<string, AccountCoverage>();
+    for (const t of stored) {
+      const key = t.account;
+      if (!key) continue;
+      const c = map.get(key);
+      if (!c) map.set(key, { account: key, from: t.date, to: t.date, count: 1 });
+      else {
+        if (t.date < c.from) c.from = t.date;
+        if (t.date > c.to) c.to = t.date;
+        c.count++;
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.account.localeCompare(b.account));
+  }, [stored]);
+
   const avgMonthlySpend = useMemo(
     () => (monthlyData.length > 0 ? totalSpend / monthlyData.length : 0),
     [totalSpend, monthlyData]
@@ -1141,6 +1166,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     analysisTransactions,
     analysisNodeStats,
     accounts,
+    accountCoverage,
     addTransactions,
     updateTransactions,
     deleteTransactions,

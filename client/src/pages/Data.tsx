@@ -25,7 +25,7 @@ import { toast } from "sonner";
 
 export default function Data() {
   const {
-    loading, storedTransactions, nodes, tree, rules, importProfiles,
+    loading, storedTransactions, nodes, tree, rules, importProfiles, deleteImportProfile,
     workspaceName, reloadFromDisk, disconnectWorkspace, replaceAllData,
   } = useExpenses();
 
@@ -193,6 +193,42 @@ Avoid editing files while actively using the app (writes are last-one-wins).`}</
           }}
         />
       </motion.div>
+
+      {/* Saved bank profiles (created from the import dialog on the Transactions page) */}
+      {importProfiles.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.2 }}
+          className={sectionCls}
+        >
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-1">
+            <FileSpreadsheet className="w-4 h-4 text-muted-foreground" /> Saved bank profiles
+          </h3>
+          <p className="text-xs text-muted-foreground mb-3">
+            Column mappings saved from the import dialog. They apply automatically when a
+            dropped file's columns match; remove ones you no longer need.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {importProfiles.map((p) => (
+              <span
+                key={p.id}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs"
+              >
+                <span className="font-medium">{p.name}</span>
+                {p.account && <span className="text-muted-foreground">({p.account})</span>}
+                <button
+                  onClick={() => deleteImportProfile(p.id)}
+                  className="text-muted-foreground hover:text-destructive ml-1"
+                  title="Delete profile"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </motion.div>
+      )}
 
       {/* Restore confirmation */}
       <AlertDialog open={!!pendingRestore} onOpenChange={(o) => !o && setPendingRestore(null)}>

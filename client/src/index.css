@@ -172,6 +172,30 @@
     min-width: 0;
   }
 
+  /* Options inherit the select's colour/weight, so a select coloured to flag
+     its current value (e.g. uncategorised in terracotta) would tint the list */
+  select option {
+    color: var(--color-foreground);
+    font-weight: normal;
+  }
+
+  /* Always-visible, chunky scrollbar for wide tables. Only the ::-webkit-scrollbar
+     rules are used: Chrome ignores them when scrollbar-width/scrollbar-color are set,
+     and those standard properties still leave Windows' overlay scrollbar hidden until
+     the user scrolls. */
+  .scrollbar-prominent::-webkit-scrollbar {
+    height: 12px;
+    width: 12px;
+  }
+  .scrollbar-prominent::-webkit-scrollbar-track {
+    background: var(--color-secondary);
+  }
+  .scrollbar-prominent::-webkit-scrollbar-thumb {
+    background: var(--color-primary);
+    border-radius: 6px;
+    border: 2px solid var(--color-secondary);
+  }
+
   @media (min-width: 640px) {
     .container {
       padding-left: 1.5rem;

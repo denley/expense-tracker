@@ -180,14 +180,15 @@ export default function Dashboard() {
           <UploadCloud className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
           <h2 className="text-xl font-bold text-foreground">No transactions yet</h2>
           <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
-            Import a CSV export from your bank to get started. Columns and date formats are
-            detected automatically, and you can save the mapping as a profile for next time.
+            Drop a CSV export from your bank onto the Transactions page to get started. Columns
+            and date formats are detected automatically, and you can save the mapping as a profile
+            for next time.
           </p>
           <button
-            onClick={() => navigate("/import")}
+            onClick={() => navigate("/transactions")}
             className="mt-5 px-5 py-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:opacity-90"
           >
-            Import your first CSV
+            Go to Transactions
           </button>
         </motion.div>
       </div>

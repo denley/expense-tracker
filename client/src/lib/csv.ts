@@ -65,7 +65,6 @@ export function detectMapping(header: string[], rows: string[][]): ColumnMapping
   let amount = find("amount", "debit", "value");
   const credit = find("credit");
   const categoryId = find("categoryid");
-  const category = h.findIndex((col) => col !== "categoryid" && (col === "category" || col.includes("category")));
   const account = find("account", "bank");
   const notes = find("notes", "memo", "comment");
 
@@ -100,7 +99,9 @@ export function detectMapping(header: string[], rows: string[][]): ColumnMapping
     description: description === -1 ? 1 : description,
     amount: amount === -1 ? 2 : amount,
     credit: credit === -1 ? undefined : credit,
-    category: category === -1 ? undefined : category,
+    // Bank "Category" columns are deliberately never auto-mapped — their
+    // categories rarely match the tree, so the user opts in per file/profile.
+    category: undefined,
     categoryId: categoryId === -1 ? undefined : categoryId,
     account: account === -1 ? undefined : account,
     notes: notes === -1 ? undefined : notes,

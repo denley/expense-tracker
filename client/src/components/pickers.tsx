@@ -37,6 +37,8 @@ interface CategoryPickerProps {
   /** Preselected parent when creating a new category inline */
   defaultNewParentId?: string | null;
   className?: string;
+  autoFocus?: boolean;
+  onBlur?: () => void;
 }
 
 export function CategoryPicker({
@@ -46,6 +48,8 @@ export function CategoryPicker({
   emptyLabel = "— Keep unchanged —",
   defaultNewParentId = null,
   className,
+  autoFocus,
+  onBlur,
 }: CategoryPickerProps) {
   const { tree, addNode, pathOf } = useExpenses();
   const [creating, setCreating] = useState(false);
@@ -113,6 +117,9 @@ export function CategoryPicker({
       }}
       className={cn(inputCls, className)}
       title={knownValue ? pathOf(value) : undefined}
+      autoFocus={autoFocus}
+      onBlur={onBlur}
+      onKeyDown={(e) => { if (e.key === "Escape") onBlur?.(); }}
     >
       {allowEmpty && <option value="">{emptyLabel}</option>}
       {value && !knownValue && <option value={value}>{value}</option>}

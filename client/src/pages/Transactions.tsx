@@ -4,7 +4,7 @@
   bulk categorise / delete, inline row editing.
   Reads URL params: ?category= ?group= ?uncategorized=1 ?q=
 */
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { Rule, Transaction } from "@/lib/types";
 import { UNCATEGORIZED_ID } from "@/lib/tree";
@@ -13,14 +13,15 @@ import TransactionEditDialog from "@/components/TransactionEditDialog";
 import SplitTransactionDialog from "@/components/SplitTransactionDialog";
 import RuleQuickDialog from "@/components/RuleQuickDialog";
 import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
+import ImportDialog from "@/components/ImportDialog";
 import { CategoryPicker, CategoryTreeDropdown } from "@/components/pickers";
-import { formatCurrency, formatCurrencyExact, formatDate } from "@/lib/utils";
+import { formatCurrency, formatCurrencyExact, formatDate, formatIsoDate } from "@/lib/utils";
 import { transactionsToPortableCsv, downloadFile } from "@/lib/export";
 import { dedupKey } from "@/lib/csv";
 import { normalizeMerchant, ruleMatches, suggestPatternsForUncategorised, type RuleChange } from "@/lib/rules";
 import {
   Search, ArrowUpDown, Plus, X, Trash2, Download, Filter,
-  CheckSquare, PencilLine, Wand2, Copy, Lightbulb, Split,
+  CheckSquare, PencilLine, Wand2, Copy, Lightbulb, Split, UploadCloud,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -37,7 +38,7 @@ const PAGE_SIZE = 100;
 
 export default function Transactions() {
   const {
-    transactions, allTransactions, loading, accounts, groupColors, tree, nameOf,
+    transactions, allTransactions, loading, accounts, accountCoverage, groupColors, tree, nameOf,
     updateTransactions, deleteTransactions, runRules, rules,
   } = useExpenses();
   const [location] = useLocation();
@@ -74,6 +75,19 @@ export default function Transactions() {
 
   // Post-"Apply Rules" review
   const [ruleRunChanges, setRuleRunChanges] = useState<RuleChange[] | null>(null);
+
+  // CSV import — the whole page is a drop target; dragDepth handles dragleave
+  // firing as the cursor crosses child elements
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [dragDepth, setDragDepth] = useState(0);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const isCsvDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+
+  const onImported = (uncategorised: number) => {
+    setImportFile(null);
+    if (uncategorised > 0) { clearFilters(); setUncatOnly(true); }
+  };
 
   // URL params → filters (?category= is a node id)
   useEffect(() => {
@@ -240,7 +254,28 @@ export default function Transactions() {
   const selectCls = "bg-background border border-border rounded-lg px-2.5 py-2 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30";
 
   return (
-    <div className="space-y-4">
+    <div
+      className="space-y-4 relative"
+      onDragEnter={(e) => { if (isCsvDrag(e)) { e.preventDefault(); setDragDepth((d) => d + 1); } }}
+      onDragOver={(e) => { if (isCsvDrag(e)) e.preventDefault(); }}
+      onDragLeave={(e) => { if (isCsvDrag(e)) setDragDepth((d) => Math.max(0, d - 1)); }}
+      onDrop={(e) => {
+        if (!isCsvDrag(e)) return;
+        e.preventDefault();
+        setDragDepth(0);
+        const file = e.dataTransfer.files?.[0];
+        if (file) setImportFile(file);
+      }}
+    >
+      {dragDepth > 0 && (
+        <div className="fixed inset-0 lg:left-[220px] z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm pointer-events-none">
+          <div className="border-2 border-dashed border-primary rounded-2xl px-12 py-10 text-center bg-card">
+            <UploadCloud className="w-10 h-10 mx-auto text-primary mb-3" />
+            <p className="text-sm font-medium text-foreground">Drop CSV to import</p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -271,8 +306,42 @@ export default function Transactions() {
               </button>
             )}
           </p>
+          {accountCoverage.length > 0 && (
+            <p
+              className="text-xs text-muted-foreground mt-1"
+              title="Latest transaction per account across all years — export from your bank from here onwards"
+            >
+              Data until:{" "}
+              {accountCoverage.map((c, i) => (
+                <span key={c.account}>
+                  {i > 0 && " · "}
+                  <span className="font-medium text-foreground">{c.account}</span>{" "}
+                  {formatIsoDate(c.to)}
+                </span>
+              ))}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => fileInput.current?.click()}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
+            title="Import a bank CSV — or just drop one anywhere on this page"
+          >
+            <UploadCloud className="w-3.5 h-3.5" />
+            Import CSV
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) setImportFile(file);
+              e.target.value = "";
+            }}
+          />
           {rules.length > 0 && uncatCount > 0 && (
             <button
               onClick={applyRulesNow}
@@ -489,25 +558,25 @@ export default function Transactions() {
                     )}
                   </td>
                   <td className="px-3 py-2 text-xs hidden md:table-cell whitespace-nowrap">
-                    <span
-                      className={cn(
-                        t.categoryId === UNCATEGORIZED_ID
-                          ? "text-terracotta font-medium"
-                          : "text-foreground"
-                      )}
-                      title={t.path}
-                    >
-                      {t.category}
-                    </span>
-                    <span
-                      className="inline-flex items-center gap-1 text-[10px] text-muted-foreground ml-1.5"
-                    >
-                      <span
-                        className="w-1.5 h-1.5 rounded-full inline-block"
-                        style={{ backgroundColor: groupColors[t.group] }}
+                    <div className="flex items-center gap-1.5">
+                      <CategoryPicker
+                        value={t.categoryId}
+                        onChange={(id) => {
+                          if (id !== t.categoryId) updateTransactions([t.id], { categoryId: id });
+                        }}
+                        className={cn(
+                          "w-auto max-w-[220px] py-1 px-1.5 text-xs border-transparent bg-transparent hover:border-border hover:bg-background cursor-pointer",
+                          t.categoryId === UNCATEGORIZED_ID && "text-terracotta font-medium"
+                        )}
                       />
-                      {t.group}
-                    </span>
+                      <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                        <span
+                          className="w-1.5 h-1.5 rounded-full inline-block"
+                          style={{ backgroundColor: groupColors[t.group] }}
+                        />
+                        {t.group}
+                      </span>
+                    </div>
                   </td>
                   <td
                     className={cn(
@@ -576,7 +645,7 @@ export default function Transactions() {
         {visible.length === 0 && (
           <div className="py-16 text-center text-sm text-muted-foreground">
             {transactions.length === 0
-              ? "No transactions yet — import a CSV to get started."
+              ? "No transactions yet — drop a bank CSV here to get started."
               : "Nothing matches these filters."}
           </div>
         )}
@@ -688,6 +757,8 @@ export default function Transactions() {
         onOpenChange={(o) => !o && setRuleRunChanges(null)}
         changes={ruleRunChanges ?? []}
       />
+
+      <ImportDialog file={importFile} onClose={() => setImportFile(null)} onImported={onImported} />
     </div>
   );
 }
