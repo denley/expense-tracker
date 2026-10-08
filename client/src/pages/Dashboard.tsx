@@ -16,6 +16,7 @@ import StatCard from "@/components/StatCard";
 import ChartCard from "@/components/ChartCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
+import HeroBackdrop from "@/components/HeroBackdrop";
 import { formatCurrency, formatCurrencyExact, formatPercent } from "@/lib/utils";
 import { CHART_HEX_COLORS } from "@/lib/types";
 import { DollarSign, ShoppingCart, TrendingUp, Receipt, UploadCloud } from "lucide-react";
@@ -27,7 +28,6 @@ import {
 import { motion } from "framer-motion";
 import { useLocation } from "wouter";
 
-const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-dashboard-athhbv2VmJKH3Q4nBmSvqg.webp";
 
 export default function Dashboard() {
   const {
@@ -182,14 +182,23 @@ export default function Dashboard() {
           <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
             Drop a CSV export from your bank onto the Transactions page to get started. Columns
             and date formats are detected automatically, and you can save the mapping as a profile
-            for next time.
+            for next time. Already have a data folder or a JSON backup from the old version of
+            the app? Upload it on the Data page.
           </p>
-          <button
-            onClick={() => navigate("/transactions")}
-            className="mt-5 px-5 py-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:opacity-90"
-          >
-            Go to Transactions
-          </button>
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+            <button
+              onClick={() => navigate("/transactions")}
+              className="px-5 py-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:opacity-90"
+            >
+              Go to Transactions
+            </button>
+            <button
+              onClick={() => navigate("/data")}
+              className="px-5 py-2.5 rounded-lg text-sm font-medium border border-border hover:bg-accent"
+            >
+              Bring over existing data
+            </button>
+          </div>
         </motion.div>
       </div>
     );
@@ -204,11 +213,7 @@ export default function Dashboard() {
         transition={{ duration: 0.5 }}
         className="relative rounded-2xl overflow-hidden h-[200px] lg:h-[240px]"
       >
-        <img
-          src={HERO_IMG}
-          alt=""
-          className="absolute inset-0 w-full h-full object-cover"
-        />
+        <HeroBackdrop />
         <div className="absolute inset-0 bg-gradient-to-r from-[#2d3436]/80 via-[#2d3436]/50 to-transparent" />
         <div className="relative z-10 h-full flex flex-col justify-center px-6 lg:px-10">
           <h2 className="text-2xl lg:text-3xl font-bold text-white tracking-tight">

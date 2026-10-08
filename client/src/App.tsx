@@ -6,7 +6,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { ExpenseProvider, useExpenses } from "./contexts/ExpenseContext";
 import Navigation from "./components/Navigation";
-import WorkspaceGate from "./components/WorkspaceGate";
+import ConnectionGate from "./components/ConnectionGate";
 import LoadingState from "./components/LoadingState";
 import Dashboard from "./pages/Dashboard";
 import Categories from "./pages/Categories";
@@ -17,7 +17,7 @@ import Transactions from "./pages/Transactions";
 import Rules from "./pages/Rules";
 import Data from "./pages/Data";
 
-// Derive base path from Vite's base config (e.g. "/expense-tracking/")
+// Derive base path from Vite's base config (e.g. "/expense-tracker/")
 // Remove trailing slash for wouter compatibility
 const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "") || "/";
 
@@ -38,7 +38,7 @@ function Routes() {
   );
 }
 
-/** Gate the whole app until a data folder is connected */
+/** Gate the whole app until the server's data is loaded */
 function AppContent() {
   const { workspaceStatus } = useExpenses();
 
@@ -53,7 +53,7 @@ function AppContent() {
   if (workspaceStatus !== "connected") {
     return (
       <main className="container py-6">
-        <WorkspaceGate />
+        <ConnectionGate />
       </main>
     );
   }

@@ -10,11 +10,11 @@ import { useExpenses } from "@/contexts/ExpenseContext";
 import type { ColumnMapping, DateFormat, AmountConvention, ImportProfile } from "@/lib/types";
 import { UNCATEGORIZED_ID } from "@/lib/tree";
 import {
-  parseCsvFile, detectMapping, detectDateFormat, buildCandidates, dedupKey,
+  parseCsvText, detectImportSettings, buildCandidates, dedupKey,
   type ParsedCsv, type ImportCandidate, type RowError,
 } from "@/lib/csv";
 import { applyRules } from "@/lib/rules";
-import { uid } from "@/lib/db";
+import { uid } from "@/lib/id";
 import { formatCurrency, formatIsoDate } from "@/lib/utils";
 import { inputCls, CategoryPicker } from "@/components/pickers";
 import {
@@ -109,7 +109,7 @@ export default function ImportDialog({ file, onClose, onImported }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const result = await parseCsvFile(file);
+        const result = parseCsvText(await file.text());
         if (cancelled) return;
         if (result.rows.length === 0) {
           toast.error("Couldn't find any data rows in that file");
@@ -118,32 +118,13 @@ export default function ImportDialog({ file, onClose, onImported }: Props) {
         }
         setParsed(result);
 
-        const detected = detectMapping(result.header, result.rows);
-        setMapping(detected);
-        setDateFormat(detectDateFormat(result.rows.map((r) => r[detected.date])));
-
-        // Sign convention heuristic: bank exports have mixed signs with spending negative;
-        // this app's own exports (and the legacy format) have expenses positive.
-        const amounts = result.rows
-          .map((r) => parseFloat(String(r[detected.amount] ?? "").replace(/[$,\s]/g, "")))
-          .filter((n) => !isNaN(n));
-        const negatives = amounts.filter((n) => n < 0).length;
-        const isOwnExport =
-          result.header.includes("ID") &&
-          (result.header.includes("CategoryId") || result.header.includes("Group"));
-        setConvention(
-          detected.credit !== undefined ? "debitCredit"
-          : isOwnExport || negatives < amounts.length * 0.3 ? "positiveIsExpense"
-          : "negativeIsExpense"
-        );
-
-        // Try to auto-match a saved profile by header shape
-        const match = importProfiles.find(
-          (p) => JSON.stringify(p.mapping) === JSON.stringify(detected)
-        );
-        if (match) {
-          applyProfile(match);
-          toast.success(`Matched saved profile "${match.name}"`);
+        const detected = detectImportSettings(result, importProfiles);
+        setMapping(detected.mapping);
+        setDateFormat(detected.dateFormat);
+        setConvention(detected.convention);
+        if (detected.profile) {
+          applyProfile(detected.profile);
+          toast.success(`Matched saved profile "${detected.profile.name}"`);
         }
       } catch {
         if (!cancelled) {

@@ -11,19 +11,15 @@ import type {
   ColumnMapping,
   DateFormat,
   AmountConvention,
+  ImportProfile,
 } from "./types";
 import { UNCATEGORIZED_ID } from "./tree";
-import { uid } from "./db";
+import { uid } from "./id";
 
 export interface ParsedCsv {
   rows: string[][];
   hasHeader: boolean;
   header: string[];
-}
-
-export async function parseCsvFile(file: File): Promise<ParsedCsv> {
-  const text = await file.text();
-  return parseCsvText(text);
 }
 
 export function parseCsvText(text: string): ParsedCsv {
@@ -37,6 +33,41 @@ export function parseCsvText(text: string): ParsedCsv {
     hasHeader,
     header: hasHeader ? rows[0] : rows[0]?.map((_, i) => `Column ${i + 1}`) ?? [],
   };
+}
+
+export interface DetectedImport {
+  mapping: ColumnMapping;
+  dateFormat: DateFormat;
+  convention: AmountConvention;
+  /** A saved bank profile whose column mapping matches this file's shape */
+  profile?: ImportProfile;
+}
+
+/**
+ * Everything the import wizard guesses before the user adjusts anything:
+ * column mapping, date format, sign convention, and a matching saved profile
+ * (whose settings then win).
+ */
+export function detectImportSettings(parsed: ParsedCsv, profiles: ImportProfile[]): DetectedImport {
+  const mapping = detectMapping(parsed.header, parsed.rows);
+  const dateFormat = detectDateFormat(parsed.rows.map((r) => r[mapping.date]));
+
+  // Sign convention heuristic: bank exports have mixed signs with spending negative;
+  // this app's own exports (and the legacy format) have expenses positive.
+  const amounts = parsed.rows
+    .map((r) => parseFloat(String(r[mapping.amount] ?? "").replace(/[$,\s]/g, "")))
+    .filter((n) => !isNaN(n));
+  const negatives = amounts.filter((n) => n < 0).length;
+  const isOwnExport =
+    parsed.header.includes("ID") &&
+    (parsed.header.includes("CategoryId") || parsed.header.includes("Group"));
+  const convention: AmountConvention =
+    mapping.credit !== undefined ? "debitCredit"
+    : isOwnExport || negatives < amounts.length * 0.3 ? "positiveIsExpense"
+    : "negativeIsExpense";
+
+  const profile = profiles.find((p) => JSON.stringify(p.mapping) === JSON.stringify(mapping));
+  return { mapping, dateFormat, convention, ...(profile ? { profile } : {}) };
 }
 
 /** A row is a header if no cell parses as a date or a money amount */

@@ -21,5 +21,9 @@ export default defineConfig({
     // PORT lets the Claude Code browser preview assign a free port
     port: Number(process.env.PORT) || 3000,
     host: true,
+    // the API comes from `pnpm dev:server` (SERVER_PORT, default 8098)
+    proxy: {
+      "/expense-tracker/api": `http://127.0.0.1:${process.env.SERVER_PORT || 8098}`,
+    },
   },
 });

@@ -195,3 +195,68 @@ export function validateName(
   if (clash) return `"${trimmed}" already exists at this level`;
   return null;
 }
+
+/**
+ * Resolve a node id, full path ("Travel > Japan 2026 > Food") or unique name
+ * to a node id. Names prefer non-archived nodes; ambiguous names don't resolve.
+ */
+export function resolveCategoryIn(tree: CategoryTree, idPathOrName: string): string | undefined {
+  const raw = idPathOrName.trim();
+  if (!raw) return undefined;
+  if (tree.byId.has(raw)) return raw;
+  const needle = raw.toLowerCase();
+  for (const n of tree.nodes) {
+    if (tree.pathOf(n.id).toLowerCase() === needle) return n.id;
+  }
+  const byName = tree.nodes.filter((n) => n.name.toLowerCase() === needle);
+  const active = byName.filter((n) => !tree.isArchived(n.id));
+  const pool = active.length > 0 ? active : byName;
+  return pool.length === 1 ? pool[0].id : undefined;
+}
+
+/**
+ * Resolve-or-create category paths. Existing paths/names resolve as in
+ * resolveCategoryIn; anything else is created segment by segment under the
+ * matching ancestors. Returns the input → id map and the nodes created.
+ */
+export function ensurePaths(
+  nodes: CategoryNode[],
+  nameOrPaths: string[],
+  now = new Date().toISOString()
+): { ids: Record<string, string>; created: CategoryNode[] } {
+  const ids: Record<string, string> = {};
+  const created: CategoryNode[] = [];
+  let cur = buildTree(nodes);
+  for (const nameOrPath of nameOrPaths) {
+    const existing = resolveCategoryIn(cur, nameOrPath);
+    if (existing) {
+      ids[nameOrPath] = existing;
+      continue;
+    }
+    const segments = nameOrPath.split(PATH_SEP).map((s) => s.trim()).filter(Boolean);
+    if (segments.length === 0) {
+      ids[nameOrPath] = UNCATEGORIZED_ID;
+      continue;
+    }
+    let parentId: string | null = null;
+    for (const seg of segments) {
+      const siblings: CategoryNode[] = cur.children.get(parentId) ?? [];
+      const found = siblings.find((s) => s.name.toLowerCase() === seg.toLowerCase());
+      if (found) {
+        parentId = found.id;
+      } else {
+        const node: CategoryNode = {
+          id: slugForName(seg, cur.byId.keys()),
+          parentId,
+          name: seg.replace(/>/g, "-"),
+          createdAt: now,
+        };
+        created.push(node);
+        parentId = node.id;
+        cur = buildTree([...nodes, ...created]);
+      }
+    }
+    ids[nameOrPath] = parentId ?? UNCATEGORIZED_ID;
+  }
+  return { ids, created };
+}

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["./**/*.ts", "../client/src/lib/files.ts", "../client/src/lib/csv.ts", "../client/src/lib/rules.ts", "../client/src/lib/tree.ts", "../client/src/lib/export.ts", "../client/src/lib/id.ts", "../client/src/lib/types.ts"],
+  "exclude": ["dist"]
+}

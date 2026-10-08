@@ -12,6 +12,7 @@ import { useExpenses } from "@/contexts/ExpenseContext";
 import ChartCard from "@/components/ChartCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
+import HeroBackdrop from "@/components/HeroBackdrop";
 import { formatCurrency, formatCurrencyExact, formatDate, formatPercent } from "@/lib/utils";
 import { TrendingUp, Repeat, Zap, ArrowUpRight, X, ArrowUpDown } from "lucide-react";
 import {
@@ -23,7 +24,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import type { Transaction } from "@/lib/types";
 
-const HERO_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663325128704/SA2HSaHwj3kdEwrv6Yi87t/hero-trends-2xQXBkMzyXx66hXLnF7Eio.webp";
 
 export default function Trends() {
   const { loading, monthlyData, groupData, avgMonthlySpend, groupColors, analysisTransactions } = useExpenses();
@@ -185,7 +185,7 @@ export default function Trends() {
         transition={{ duration: 0.5 }}
         className="relative rounded-2xl overflow-hidden h-[180px] lg:h-[200px]"
       >
-        <img src={HERO_IMG} alt="" className="absolute inset-0 w-full h-full object-cover" />
+        <HeroBackdrop />
         <div className="absolute inset-0 bg-gradient-to-r from-[#2d3436]/80 via-[#2d3436]/50 to-transparent" />
         <div className="relative z-10 h-full flex flex-col justify-center px-6 lg:px-10">
           <h2 className="text-2xl lg:text-3xl font-bold text-white tracking-tight">

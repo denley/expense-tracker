@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { Transaction } from "@/lib/types";
 import { UNCATEGORIZED_ID } from "@/lib/tree";
-import { uid } from "@/lib/db";
+import { uid } from "@/lib/id";
 import {
   Dialog,
   DialogContent,

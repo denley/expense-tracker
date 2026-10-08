@@ -16,7 +16,8 @@ import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
 import ImportDialog from "@/components/ImportDialog";
 import { CategoryPicker, CategoryTreeDropdown } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatDate, formatIsoDate } from "@/lib/utils";
-import { transactionsToPortableCsv, downloadFile } from "@/lib/export";
+import { transactionsToPortableCsv } from "@/lib/export";
+import { downloadFile } from "@/lib/download";
 import { dedupKey } from "@/lib/csv";
 import { normalizeMerchant, ruleMatches, suggestPatternsForUncategorised, type RuleChange } from "@/lib/rules";
 import {

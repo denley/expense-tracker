@@ -12,6 +12,7 @@ import {
 import { useTheme } from "@/contexts/ThemeContext";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import ScopeSelector from "@/components/ScopeSelector";
+import SyncStatus from "@/components/SyncStatus";
 import { cn } from "@/lib/utils";
 
 const navSections = [
@@ -34,7 +35,7 @@ const navSections = [
     title: "Manage",
     items: [
       { path: "/rules", label: "Rules", icon: Wand2 },
-      { path: "/data", label: "Data folder", icon: Database },
+      { path: "/data", label: "Data", icon: Database },
     ],
   },
 ];
@@ -44,7 +45,7 @@ const allItems = navSections.flatMap((s) => s.items);
 export default function Navigation() {
   const [location] = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const { scopeLabel, workspaceName, hideOneOffs, setHideOneOffs, hasOneOffSpend } = useExpenses();
+  const { scopeLabel, me, hideOneOffs, setHideOneOffs, hasOneOffSpend } = useExpenses();
 
   const oneOffToggle = (hasOneOffSpend || hideOneOffs) && (
     <label
@@ -69,10 +70,8 @@ export default function Navigation() {
           <h1 className="text-lg font-bold tracking-tight text-foreground leading-tight">
             Expense<br />Tracker
           </h1>
-          <p className="text-xs text-muted-foreground mt-1 font-medium truncate">
-            {scopeLabel}
-            {workspaceName && <span className="text-muted-foreground/60"> · {workspaceName}</span>}
-          </p>
+          <p className="text-xs text-muted-foreground mt-1 font-medium truncate">{scopeLabel}</p>
+          <SyncStatus className="mt-1" />
         </div>
 
         <div className="px-3 pb-2">
@@ -111,6 +110,11 @@ export default function Navigation() {
         </div>
 
         <div className="p-3 border-t border-border">
+          {me && (
+            <p className="px-3 pb-1 text-[11px] text-muted-foreground truncate" title={me.login}>
+              Signed in as {me.name}
+            </p>
+          )}
           <button
             onClick={toggleTheme}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-200 w-full"
@@ -123,7 +127,10 @@ export default function Navigation() {
 
       {/* Mobile top bar with scope + theme */}
       <div className="lg:hidden sticky top-0 z-40 bg-card/95 backdrop-blur border-b border-border px-4 py-2 flex items-center justify-between gap-3">
-        <h1 className="text-sm font-bold tracking-tight text-foreground">Expense Tracker</h1>
+        <div className="min-w-0">
+          <h1 className="text-sm font-bold tracking-tight text-foreground leading-tight">Expense Tracker</h1>
+          <SyncStatus className="text-[10px]" />
+        </div>
         <div className="flex items-center gap-2">
           <ScopeSelector className="w-[120px]" />
           <button

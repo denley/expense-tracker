@@ -1,0 +1,22 @@
+# Expense tracker on the home server. Listens on the host's loopback only:
+# the way in is `tailscale serve` (HTTPS + the caller's tailnet identity).
+# Data lives in ./data (gitignored): the CSV files, activity.jsonl, backups/,
+# and optionally server.env (ALLOWED_LOGINS).
+# Named explicitly: the checkout dir may be called `app/`, and the default
+# project name (the dir name) would clash with other checkouts.
+name: expense-tracker
+services:
+  expense-tracker:
+    build: .
+    container_name: expense-tracker
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8098:8098"
+    env_file:
+      - path: data/server.env
+        required: false
+    environment:
+      - APP_VERSION=${APP_VERSION:-dev}
+      - DATA_DIR_LABEL=data/ next to compose.yaml on the server
+    volumes:
+      - ./data:/data

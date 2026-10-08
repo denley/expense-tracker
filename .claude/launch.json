@@ -2,9 +2,17 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "server",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx", "server/main.ts"],
+      "env": { "DATA_DIR": "/tmp/expense-tracker-dev-data", "STATIC_DIR": "./dist", "PORT": "8198" },
+      "port": 8198
+    },
+    {
       "name": "dev",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite", "--strictPort"],
+      "env": { "SERVER_PORT": "8198" },
       "port": 5199,
       "autoPort": true
     }

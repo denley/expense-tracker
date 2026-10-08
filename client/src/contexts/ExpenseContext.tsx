@@ -1,10 +1,13 @@
 /*
-  Central data store — file-first.
-  The source of truth is a folder on the user's disk (File System Access API):
+  Central data store, backed by the server.
+  The source of truth is the server's data folder:
   transactions.csv / categories.csv / rules.csv / import-profiles.json.
-  - Every mutation writes the affected file immediately (per-file write queue)
-  - External edits (AI agents, Excel) are picked up via mtime checks on focus
-    and a slow interval
+  - Each file is a FileSync (lib/sync): edits apply locally at once and are
+    written to the server as replayable updaters against the file's revision,
+    so concurrent edits (other people, other tabs, agents) merge instead of
+    clobbering each other
+  - A live event stream reports every change on the server; changed files
+    are re-read and anything made by someone else is announced
   - categories.csv is an arbitrary-depth tree (adjacency list). Transactions
     reference a node by id and may be filed on ANY node; reports roll
     descendants up into ancestors. Tree edits never rewrite transactions.csv.
@@ -41,44 +44,43 @@ export interface AccountCoverage {
 import { MONTH_LABELS, groupColor } from "@/lib/types";
 import {
   buildTree,
-  makeUncategorizedNode,
   slugForName,
   validateName,
+  resolveCategoryIn,
+  ensurePaths,
   UNCATEGORIZED_ID,
-  PATH_SEP,
   type CategoryTree,
 } from "@/lib/tree";
-import { dbGet, dbSet, KEYS, uid } from "@/lib/db";
-import { transactionsToCsv } from "@/lib/export";
+import { dbGet, dbSet, KEYS } from "@/lib/db";
+import { uid } from "@/lib/id";
+import { csvToTransactions } from "@/lib/export";
 import {
   WS_FILES,
-  supportsFileSystem,
-  pickWorkspaceFolder,
-  saveWorkspaceHandle,
-  loadWorkspaceHandle,
-  clearWorkspaceHandle,
-  queryPermission,
-  requestPermission,
-  readWorkspace,
-  writeWorkspaceFile,
-  writeWorkspaceFileIfAbsent,
-  getWorkspaceFileMtime,
-  ensureWorkspaceReadme,
+  serializeTxns,
   nodesToCsv,
+  csvToNodes,
   rulesToCsv,
-  type WorkspaceData,
-} from "@/lib/workspace";
+  csvToRules,
+  profilesToJson,
+  jsonToProfiles,
+  normalizeLoaded,
+  serializeWorkspace,
+  type WsFileName,
+} from "@/lib/files";
+import * as api from "@/lib/api";
+import type { Actor, ActivityEntry } from "@/lib/api";
+import { FileSync, type Updater } from "@/lib/sync";
 import { applyRules, type RuleChange } from "@/lib/rules";
 import { parseScope, scopeContains, scopeLabelOf } from "@/lib/scope";
 import { toast } from "sonner";
 
 export type WorkspaceStatus =
   | "checking" // booting, don't render anything yet
-  | "unsupported" // browser lacks the File System Access API
-  | "none" // no folder connected yet
-  | "prompt" // folder known but needs a permission click
   | "connected"
-  | "error";
+  | "error"; // server unreachable, or its transactions.csv is unreadable
+
+/** saved = everything is on the server; saving = writes queued; offline = retrying */
+export type SyncStatus = "saved" | "saving" | "offline";
 
 export interface TransactionChanges {
   categoryId?: string;
@@ -93,14 +95,20 @@ interface ExpenseContextType {
   loading: boolean;
   error: string | null;
 
-  // Workspace
+  // Server connection
   workspaceStatus: WorkspaceStatus;
-  workspaceName: string;
   workspaceError: string | null;
-  chooseWorkspaceFolder: () => Promise<void>;
-  reconnectWorkspace: () => Promise<void>;
-  disconnectWorkspace: () => Promise<void>;
-  reloadFromDisk: () => Promise<void>;
+  syncStatus: SyncStatus;
+  /** Who the server says we are (Tailscale identity) */
+  me: Actor | null;
+  /** Where the server keeps the data (for display) */
+  dataDir: string;
+  /** Re-read every file from the server */
+  reloadFromServer: () => Promise<void>;
+  /** Retry the initial connection after an error */
+  retryConnect: () => void;
+  /** The most recent change on the server (bumps on every change event) */
+  lastChange: { at: number; entry?: ActivityEntry } | null;
 
   /** Transactions within the current year scope (runtime form, sorted by date) */
   transactions: Transaction[];
@@ -213,64 +221,47 @@ interface ExpenseContextType {
   saveImportProfile: (p: ImportProfile) => void;
   deleteImportProfile: (id: string) => void;
 
-  // Backup restore (writes into the workspace)
-  replaceAllData: (data: {
-    transactions: StoredTransaction[];
-    nodes?: CategoryNode[];
-    rules?: Rule[];
-    importProfiles?: ImportProfile[];
-  }) => void;
+  /** Replace every data file on the server (backup restore / first upload). The server snapshots first. */
+  replaceAllData: (
+    data: {
+      transactions: StoredTransaction[];
+      nodes?: CategoryNode[];
+      rules?: Rule[];
+      importProfiles?: ImportProfile[];
+    },
+    reason: string
+  ) => Promise<void>;
 }
 
 const ExpenseContext = createContext<ExpenseContextType | null>(null);
 
-function serializeTxns(txns: StoredTransaction[]): string {
-  const sorted = [...txns].sort(
-    (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id.localeCompare(b.id))
-  );
-  return transactionsToCsv(sorted) + "\n";
+interface Syncs {
+  txns: FileSync<StoredTransaction[]>;
+  nodes: FileSync<CategoryNode[]>;
+  rules: FileSync<Rule[]>;
+  profiles: FileSync<ImportProfile[]>;
 }
 
-/**
- * Ensure loaded data is coherent: the Uncategorized root exists and every
- * transaction's categoryId points at a real node. Unknown ids (e.g. an agent
- * referenced a node it forgot to add) are auto-registered as root nodes named
- * after the id so no data is lost — visible and fixable in the app.
- */
-function normalizeLoaded(
-  txns: StoredTransaction[],
-  nodes: CategoryNode[]
-): { txns: StoredTransaction[]; nodes: CategoryNode[]; txnsChanged: boolean; nodesChanged: boolean } {
-  const nextNodes = [...nodes];
-  let nodesChanged = false;
-  if (!nextNodes.some((n) => n.id === UNCATEGORIZED_ID)) {
-    nextNodes.push(makeUncategorizedNode());
-    nodesChanged = true;
+function parseTxnsStrict(text: string): StoredTransaction[] {
+  const parsed = csvToTransactions(text);
+  if (parsed === null) {
+    throw new Error(
+      "transactions.csv on the server couldn't be parsed (missing or invalid header row) — keeping the last good copy"
+    );
   }
-  const known = new Set(nextNodes.map((n) => n.id));
-  let txnsChanged = false;
-  const nextTxns = txns.map((t) => {
-    const cat = t.categoryId || UNCATEGORIZED_ID;
-    if (!known.has(cat)) {
-      nextNodes.push({ id: cat, parentId: null, name: cat });
-      known.add(cat);
-      nodesChanged = true;
-    }
-    if (t.categoryId !== cat) {
-      txnsChanged = true;
-      return { ...t, categoryId: cat };
-    }
-    return t;
-  });
-  return { txns: nextTxns, nodes: nextNodes, txnsChanged, nodesChanged };
+  return parsed;
 }
 
 export function ExpenseProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error] = useState<string | null>(null);
   const [wsStatus, setWsStatus] = useState<WorkspaceStatus>("checking");
-  const [wsName, setWsName] = useState("");
   const [wsError, setWsError] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("saved");
+  const [me, setMe] = useState<Actor | null>(null);
+  const [dataDir, setDataDir] = useState("");
+  const [lastChange, setLastChange] = useState<{ at: number; entry?: ActivityEntry } | null>(null);
+  const [connectAttempt, setConnectAttempt] = useState(0);
 
   const [stored, setStored] = useState<StoredTransaction[]>([]);
   const [nodes, setNodes] = useState<CategoryNode[]>([]);
@@ -278,282 +269,177 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   const [importProfiles, setImportProfiles] = useState<ImportProfile[]>([]);
   const [settings, setSettings] = useState<Settings>({ yearScope: "all" });
 
-  const dirRef = useRef<FileSystemDirectoryHandle | null>(null);
-  const handleRef = useRef<FileSystemDirectoryHandle | null>(null);
   /**
-   * Mutations may only persist once the workspace is fully loaded. Guards
-   * against a half-booted (or crash-remounted) instance writing its empty
-   * in-memory state over a good file on disk.
+   * Mutations may only persist once every file is loaded. Guards against a
+   * half-booted (or crash-remounted) instance writing its empty in-memory
+   * state over good data on the server.
    */
   const canMutateRef = useRef(false);
-  const mtimesRef = useRef<Record<string, number>>({});
-  const writeQueue = useRef<Record<string, Promise<void>>>({});
-  const checkingRef = useRef(false);
+  const meRef = useRef<Actor | null>(null);
 
-  // ---------- Write scheduling (per-file queue, immediate) ----------
-  const scheduleWrite = useCallback((fileName: string, content: string) => {
-    const dir = dirRef.current;
-    if (!dir) return;
-    const prev = writeQueue.current[fileName] ?? Promise.resolve();
-    writeQueue.current[fileName] = prev
-      .then(() => writeWorkspaceFile(dir, fileName, content))
-      .then((mtime) => {
-        mtimesRef.current[fileName] = mtime;
-      })
-      .catch((e) => {
-        console.error(`Failed to write ${fileName}`, e);
-        toast.error(`Failed to write ${fileName} — check folder permissions`);
+  // ---------- File syncs ----------
+  const syncsRef = useRef<Syncs | null>(null);
+  if (!syncsRef.current) {
+    const all: Array<FileSync<any>> = [];
+    const onStatus = () => {
+      const offline = all.some((s) => s.offline);
+      const busy = all.some((s) => s.hasPending);
+      setSyncStatus(offline ? "offline" : busy ? "saving" : "saved");
+    };
+    const onError = (message: string) => toast.error(message);
+    const make = <T,>(
+      name: WsFileName,
+      parse: (text: string) => T,
+      serialize: (data: T) => string,
+      onView: (data: T) => void
+    ) => {
+      const s = new FileSync<T>({
+        name, parse, serialize, onView, onStatus, onError,
+        put: api.putFile,
+        fetch: api.getFile,
       });
-  }, []);
+      all.push(s);
+      return s;
+    };
+    syncsRef.current = {
+      txns: make(WS_FILES.transactions, parseTxnsStrict, serializeTxns, setStored),
+      nodes: make(WS_FILES.categories, csvToNodes, nodesToCsv, setNodes),
+      rules: make(WS_FILES.rules, csvToRules, rulesToCsv, setRules),
+      profiles: make(WS_FILES.profiles, jsonToProfiles, profilesToJson, setImportProfiles),
+    };
+  }
+  const syncs = syncsRef.current;
 
   const guardMutation = useCallback(() => {
     if (canMutateRef.current) return true;
-    console.warn("Mutation ignored — workspace not fully loaded");
-    toast.error("Data folder isn't loaded yet — change not saved");
+    console.warn("Mutation ignored — data not fully loaded");
+    toast.error("Data isn't loaded yet — change not saved");
     return false;
   }, []);
 
-  const persistTxns = useCallback(
-    (next: StoredTransaction[]) => {
-      if (!guardMutation()) return;
-      setStored(next);
-      scheduleWrite(WS_FILES.transactions, serializeTxns(next));
-    },
-    [scheduleWrite, guardMutation]
+  const mutateTxns = useCallback(
+    (fn: Updater<StoredTransaction[]>) => guardMutation() && syncs.txns.mutate(fn),
+    [syncs, guardMutation]
   );
-  const persistNodes = useCallback(
-    (next: CategoryNode[]) => {
-      if (!guardMutation()) return;
-      setNodes(next);
-      scheduleWrite(WS_FILES.categories, nodesToCsv(next));
-    },
-    [scheduleWrite, guardMutation]
+  const mutateNodes = useCallback(
+    (fn: Updater<CategoryNode[]>) => guardMutation() && syncs.nodes.mutate(fn),
+    [syncs, guardMutation]
   );
-  const persistRules = useCallback(
-    (next: Rule[]) => {
-      if (!guardMutation()) return;
-      setRules(next);
-      scheduleWrite(WS_FILES.rules, rulesToCsv(next));
-    },
-    [scheduleWrite, guardMutation]
+  const mutateRules = useCallback(
+    (fn: Updater<Rule[]>) => guardMutation() && syncs.rules.mutate(fn),
+    [syncs, guardMutation]
   );
-  const persistProfiles = useCallback(
-    (next: ImportProfile[]) => {
-      if (!guardMutation()) return;
-      setImportProfiles(next);
-      scheduleWrite(WS_FILES.profiles, JSON.stringify(next, null, 2) + "\n");
-    },
-    [scheduleWrite, guardMutation]
+  const mutateProfiles = useCallback(
+    (fn: Updater<ImportProfile[]>) => guardMutation() && syncs.profiles.mutate(fn),
+    [syncs, guardMutation]
   );
   const persistSettings = useCallback((next: Settings) => {
     setSettings(next);
     void dbSet(KEYS.settings, next);
   }, []);
 
-  // ---------- Loading workspace contents into state ----------
-  const applyLoaded = useCallback(
-    (data: WorkspaceData, mtimes: Record<string, number>) => {
-      const norm = normalizeLoaded(data.transactions, data.nodes);
-      mtimesRef.current = { ...mtimesRef.current, ...mtimes };
-      setStored(norm.txns);
-      setNodes(norm.nodes);
-      setRules(data.rules);
-      setImportProfiles(data.importProfiles);
-      // Write back normalisation fixes so the files stay consistent
-      if (norm.txnsChanged) scheduleWrite(WS_FILES.transactions, serializeTxns(norm.txns));
-      if (norm.nodesChanged || data.nodes.length === 0) {
-        scheduleWrite(WS_FILES.categories, nodesToCsv(norm.nodes));
-      }
-    },
-    [scheduleWrite]
-  );
-
-  const connectingRef = useRef(false);
-
-  const connectDir = useCallback(
-    async (dir: FileSystemDirectoryHandle) => {
-      if (connectingRef.current) return;
-      connectingRef.current = true;
-      try {
-        const { data, mtimes } = await readWorkspace(dir);
-
-        // A present-but-unparseable transactions.csv must never load as
-        // "zero transactions" — a later write would wipe the real contents.
-        if (data.transactionsUnreadable) {
-          handleRef.current = dir;
-          setWsName(dir.name);
-          setWsError(
-            "transactions.csv exists but couldn't be parsed (missing or invalid header row). " +
-              "Not loading it, to avoid overwriting its contents. Fix or remove the file, then reconnect."
-          );
-          setWsStatus("error");
-          setLoading(false);
-          return;
-        }
-
-        dirRef.current = dir;
-
-        if (!data.hasTransactionsFile) {
-          // No transactions.csv — initialize an empty workspace. Only ever
-          // CREATE files here, never overwrite: a folder with sidecar files
-          // but no transactions.csv must keep them.
-          mtimes[WS_FILES.transactions] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.transactions, serializeTxns([]));
-          mtimes[WS_FILES.categories] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.categories, nodesToCsv([makeUncategorizedNode()]));
-          mtimes[WS_FILES.rules] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.rules, rulesToCsv([]));
-          mtimes[WS_FILES.profiles] = await writeWorkspaceFileIfAbsent(dir, WS_FILES.profiles, "[]\n");
-          await ensureWorkspaceReadme(dir);
-          // Re-read so pre-existing sidecar files win over the seed
-          const reread = await readWorkspace(dir);
-          applyLoaded(reread.data, reread.mtimes);
-        } else {
-          await ensureWorkspaceReadme(dir);
-          applyLoaded(data, mtimes);
-        }
-
-        handleRef.current = dir;
-        await saveWorkspaceHandle(dir);
-        setWsName(dir.name);
-        setWsError(null);
-        setWsStatus("connected");
-        canMutateRef.current = true;
-        setLoading(false);
-      } catch (e) {
-        setWsError(e instanceof Error ? e.message : "Failed to read the data folder");
-        setWsStatus("error");
-        setLoading(false);
-      } finally {
-        connectingRef.current = false;
-      }
-    },
-    [applyLoaded]
+  const syncFor = useCallback(
+    (name: string): FileSync<any> | undefined =>
+      ({
+        [WS_FILES.transactions]: syncs.txns,
+        [WS_FILES.categories]: syncs.nodes,
+        [WS_FILES.rules]: syncs.rules,
+        [WS_FILES.profiles]: syncs.profiles,
+      })[name],
+    [syncs]
   );
 
   // ---------- Boot ----------
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const sett = await dbGet<Settings>(KEYS.settings);
-      if (sett) setSettings(sett);
-
-      if (!supportsFileSystem()) {
-        setWsStatus("unsupported");
-        setLoading(false);
-        return;
-      }
-
-      const handle = await loadWorkspaceHandle();
-      if (!handle) {
-        setWsStatus("none");
-        setLoading(false);
-        return;
-      }
-      handleRef.current = handle;
-      setWsName(handle.name);
-      const perm = await queryPermission(handle);
-      if (perm === "granted") {
-        await connectDir(handle);
-      } else {
-        setWsStatus("prompt");
-        setLoading(false);
+      const sett = await dbGet<Settings>(KEYS.settings).catch(() => undefined);
+      if (sett && !cancelled) setSettings(sett);
+      try {
+        const ws = await api.getWorkspace();
+        if (cancelled) return;
+        meRef.current = ws.me;
+        setMe(ws.me);
+        setDataDir(ws.dataDir);
+        syncs.nodes.load(ws.files[WS_FILES.categories]);
+        syncs.rules.load(ws.files[WS_FILES.rules]);
+        syncs.profiles.load(ws.files[WS_FILES.profiles]);
+        syncs.txns.load(ws.files[WS_FILES.transactions]);
+        canMutateRef.current = true;
+        setWsError(null);
+        setWsStatus("connected");
+      } catch (e) {
+        if (cancelled) return;
+        setWsError(
+          e instanceof api.ApiError && e.status === 403
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : "Couldn't reach the server"
+        );
+        setWsStatus("error");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+    };
+  }, [syncs, connectAttempt]);
+
+  const retryConnect = useCallback(() => {
+    setLoading(true);
+    setWsStatus("checking");
+    setConnectAttempt((n) => n + 1);
   }, []);
 
-  // ---------- Workspace actions ----------
-  const chooseWorkspaceFolder = useCallback(async () => {
-    try {
-      const dir = await pickWorkspaceFolder();
-      setLoading(true);
-      await connectDir(dir);
-    } catch (e) {
-      if ((e as Error)?.name !== "AbortError") {
-        toast.error("Couldn't open that folder");
-      }
-    }
-  }, [connectDir]);
-
-  const reconnectWorkspace = useCallback(async () => {
-    const handle = handleRef.current;
-    if (!handle) return;
-    const perm = await requestPermission(handle);
-    if (perm === "granted") {
-      setLoading(true);
-      await connectDir(handle);
-    } else {
-      toast.error("Folder access was denied");
-    }
-  }, [connectDir]);
-
-  const disconnectWorkspace = useCallback(async () => {
-    await clearWorkspaceHandle();
-    canMutateRef.current = false;
-    dirRef.current = null;
-    handleRef.current = null;
-    mtimesRef.current = {};
-    setStored([]);
-    setNodes([]);
-    setRules([]);
-    setImportProfiles([]);
-    setWsName("");
-    setWsStatus("none");
-  }, []);
-
-  // ---------- External change detection ----------
-  const checkExternal = useCallback(
-    async (force = false) => {
-      const dir = dirRef.current;
-      if (!dir || checkingRef.current) return;
-      checkingRef.current = true;
-      try {
-        let changed = force;
-        if (!force) {
-          for (const name of Object.values(WS_FILES)) {
-            const m = await getWorkspaceFileMtime(dir, name);
-            if (m !== null && m > (mtimesRef.current[name] ?? 0)) {
-              changed = true;
-              break;
-            }
-          }
-        }
-        if (changed) {
-          const { data, mtimes } = await readWorkspace(dir);
-          if (data.transactionsUnreadable) {
-            // Remember the mtimes so this doesn't re-toast every poll
-            mtimesRef.current = { ...mtimesRef.current, ...mtimes };
-            toast.error(
-              "transactions.csv changed on disk but couldn't be parsed — keeping the current data"
-            );
-            return;
-          }
-          applyLoaded(data, mtimes);
-          if (!force) toast.info("Data files changed on disk — reloaded");
-        }
-      } catch (e) {
-        console.error("Reload from disk failed", e);
-      } finally {
-        checkingRef.current = false;
-      }
-    },
-    [applyLoaded]
-  );
-
+  // ---------- Live changes ----------
   useEffect(() => {
     if (wsStatus !== "connected") return;
-    const onFocus = () => void checkExternal();
-    window.addEventListener("focus", onFocus);
-    const interval = setInterval(() => {
-      if (document.visibilityState === "visible") void checkExternal();
-    }, 15000);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      clearInterval(interval);
-    };
-  }, [wsStatus, checkExternal]);
+    let opened = false;
+    const all = [syncs.txns, syncs.nodes, syncs.rules, syncs.profiles];
+    return api.subscribeChanges(
+      (ev) => {
+        for (const [name, rev] of Object.entries(ev.files)) {
+          if (rev) syncFor(name)?.remoteChanged(rev);
+        }
+        setLastChange({ at: Date.now(), entry: ev.entry });
+        const entry = ev.entry;
+        const mine = entry && entry.actor.login === meRef.current?.login && entry.source === "app";
+        if (entry && !mine && entry.source !== "system") {
+          toast.info(`${entry.actor.name}: ${entry.summary}`);
+        }
+      },
+      () => {
+        // (Re)connected: catch up on anything missed while the stream was down
+        if (opened) for (const s of all) void s.refetch();
+        opened = true;
+        for (const s of all) s.retryNow();
+      },
+      () => {}
+    );
+  }, [wsStatus, syncs, syncFor]);
 
-  const reloadFromDisk = useCallback(async () => {
-    await checkExternal(true);
-    toast.success("Reloaded from disk");
-  }, [checkExternal]);
+  // Warn before closing the tab with unsaved edits
+  useEffect(() => {
+    if (syncStatus === "saved") return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [syncStatus]);
+
+  const reloadFromServer = useCallback(async () => {
+    try {
+      const ws = await api.getWorkspace();
+      for (const [name, state] of Object.entries(ws.files)) {
+        const s = syncFor(name);
+        if (s && !s.hasPending) s.load(state);
+      }
+      toast.success("Reloaded from the server");
+    } catch {
+      toast.error("Couldn't reach the server");
+    }
+  }, [syncFor]);
 
   // ---------- Category tree lookups ----------
   const tree = useMemo(() => buildTree(nodes), [nodes]);
@@ -770,19 +656,24 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   );
 
   // ---------- Transaction actions ----------
+  // Every mutation goes through an updater applied to the latest copy, so it
+  // can be replayed if someone else changed the file first. Values a caller
+  // needs back (counts, new ids) are computed from the current local view.
+
+  /** Register unknown category ids as root nodes so no transaction points nowhere */
   const registerUnknownIds = useCallback(
-    (txns: StoredTransaction[]): CategoryNode[] | null => {
+    (txns: StoredTransaction[]) => {
+      const known = new Set(syncs.nodes.view.map((n) => n.id));
       const missing = new Set<string>();
-      for (const t of txns) {
-        if (t.categoryId && !tree.byId.has(t.categoryId)) missing.add(t.categoryId);
-      }
-      if (missing.size === 0) return null;
-      return [
-        ...nodes,
-        ...Array.from(missing).map((id) => ({ id, parentId: null, name: id })),
-      ];
+      for (const t of txns) if (t.categoryId && !known.has(t.categoryId)) missing.add(t.categoryId);
+      if (missing.size === 0) return;
+      mutateNodes((prev) => {
+        const have = new Set(prev.map((n) => n.id));
+        const add = Array.from(missing).filter((id) => !have.has(id));
+        return add.length ? [...prev, ...add.map((id) => ({ id, parentId: null, name: id }))] : prev;
+      });
     },
-    [tree, nodes]
+    [syncs, mutateNodes]
   );
 
   const addTransactions = useCallback(
@@ -791,72 +682,77 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         ...t,
         categoryId: t.categoryId || UNCATEGORIZED_ID,
       }));
-      const withNew = registerUnknownIds(normalized);
-      if (withNew) persistNodes(withNew);
-      persistTxns([...stored, ...normalized]);
+      registerUnknownIds(normalized);
+      const ids = new Set(normalized.map((t) => t.id));
+      // replay-safe: never add the same id twice
+      mutateTxns((prev) => [...prev.filter((t) => !ids.has(t.id)), ...normalized]);
     },
-    [stored, registerUnknownIds, persistTxns, persistNodes]
+    [registerUnknownIds, mutateTxns]
   );
 
   const updateTransactions = useCallback(
     (ids: string[], changes: TransactionChanges) => {
       const idSet = new Set(ids);
-      const next = stored.map((t) => {
-        if (!idSet.has(t.id)) return t;
-        return {
-          ...t,
-          categoryId: changes.categoryId ?? t.categoryId,
-          account: changes.account ?? t.account,
-          notes: changes.notes ?? t.notes,
-          description: changes.description ?? t.description,
-          date: changes.date ?? t.date,
-          amount: changes.amount ?? t.amount,
-        };
-      });
-      persistTxns(next);
+      mutateTxns((prev) =>
+        prev.map((t) => {
+          if (!idSet.has(t.id)) return t;
+          return {
+            ...t,
+            categoryId: changes.categoryId ?? t.categoryId,
+            account: changes.account ?? t.account,
+            notes: changes.notes ?? t.notes,
+            description: changes.description ?? t.description,
+            date: changes.date ?? t.date,
+            amount: changes.amount ?? t.amount,
+          };
+        })
+      );
     },
-    [stored, persistTxns]
+    [mutateTxns]
   );
 
   const deleteTransactions = useCallback(
     (ids: string[]) => {
       const idSet = new Set(ids);
-      persistTxns(stored.filter((t) => !idSet.has(t.id)));
+      mutateTxns((prev) => prev.filter((t) => !idSet.has(t.id)));
     },
-    [stored, persistTxns]
+    [mutateTxns]
   );
 
   const splitTransaction = useCallback(
     (id: string, parts: Array<{ amount: number; categoryId: string; notes: string }>) => {
-      const parent = stored.find((t) => t.id === id);
-      if (!parent || parts.length < 2) return;
+      if (parts.length < 2) return;
       const base = uid();
-      const rows: StoredTransaction[] = parts.map((p, i) => ({
-        id: base + i.toString(36),
-        date: parent.date,
-        description: parent.description,
-        amount: p.amount,
-        categoryId: p.categoryId || UNCATEGORIZED_ID,
-        account: parent.account,
-        notes: p.notes,
-      }));
-      persistTxns(stored.flatMap((t) => (t.id === id ? rows : [t])));
+      mutateTxns((prev) => {
+        const parent = prev.find((t) => t.id === id);
+        if (!parent) return prev;
+        const rows: StoredTransaction[] = parts.map((p, i) => ({
+          id: base + i.toString(36),
+          date: parent.date,
+          description: parent.description,
+          amount: p.amount,
+          categoryId: p.categoryId || UNCATEGORIZED_ID,
+          account: parent.account,
+          notes: p.notes,
+        }));
+        return prev.flatMap((t) => (t.id === id ? rows : [t]));
+      });
     },
-    [stored, persistTxns]
+    [mutateTxns]
   );
 
   const revertCategories = useCallback(
     (items: Array<{ id: string; categoryId: string }>) => {
       const byId = new Map(items.map((i) => [i.id, i.categoryId]));
-      persistTxns(
-        stored.map((t) => {
+      mutateTxns((prev) =>
+        prev.map((t) => {
           const cat = byId.get(t.id);
           if (cat === undefined || cat === t.categoryId) return t;
           return { ...t, categoryId: cat };
         })
       );
     },
-    [stored, persistTxns]
+    [mutateTxns]
   );
 
   // ---------- Category tree management ----------
@@ -878,10 +774,10 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         ...meta,
         createdAt: new Date().toISOString(),
       };
-      persistNodes([...nodes, node]);
+      mutateNodes((prev) => (prev.some((n) => n.id === node.id) ? prev : [...prev, node]));
       return node;
     },
-    [tree, nodes, persistNodes]
+    [tree, mutateNodes]
   );
 
   const renameNode = useCallback(
@@ -893,10 +789,10 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         toast.error(err);
         return false;
       }
-      persistNodes(nodes.map((n) => (n.id === id ? { ...n, name: name.trim() } : n)));
+      mutateNodes((prev) => prev.map((n) => (n.id === id ? { ...n, name: name.trim() } : n)));
       return true;
     },
-    [tree, nodes, persistNodes]
+    [tree, mutateNodes]
   );
 
   const moveNode = useCallback(
@@ -912,10 +808,10 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         toast.error(err);
         return false;
       }
-      persistNodes(nodes.map((n) => (n.id === id ? { ...n, parentId } : n)));
+      mutateNodes((prev) => prev.map((n) => (n.id === id ? { ...n, parentId } : n)));
       return true;
     },
-    [tree, nodes, persistNodes]
+    [tree, mutateNodes]
   );
 
   const setNodeMeta = useCallback(
@@ -923,27 +819,25 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
       id: string,
       patch: Partial<Pick<CategoryNode, "oneOff" | "color" | "budget" | "notes">>
     ) => {
-      persistNodes(nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)));
+      mutateNodes((prev) => prev.map((n) => (n.id === id ? { ...n, ...patch } : n)));
     },
-    [nodes, persistNodes]
+    [mutateNodes]
   );
 
   const setNodeArchived = useCallback(
     (id: string, archived: boolean) => {
       const node = tree.byId.get(id);
       if (!node) return;
-      persistNodes(nodes.map((n) => (n.id === id ? { ...n, archived } : n)));
+      mutateNodes((prev) => prev.map((n) => (n.id === id ? { ...n, archived } : n)));
 
       // Archiving retires the subtree's rules so future imports can't file
       // new spending into it. Restoring does NOT auto-re-enable them.
       if (archived) {
         const subtree = tree.subtreeIds(id);
-        const affected = rules.filter((r) => r.enabled && subtree.has(r.categoryId));
+        const affected = syncs.rules.view.filter((r) => r.enabled && subtree.has(r.categoryId));
         if (affected.length > 0) {
-          persistRules(
-            rules.map((r) =>
-              r.enabled && subtree.has(r.categoryId) ? { ...r, enabled: false } : r
-            )
+          mutateRules((prev) =>
+            prev.map((r) => (r.enabled && subtree.has(r.categoryId) ? { ...r, enabled: false } : r))
           );
           toast.info(
             `Disabled ${affected.length} auto-categorisation rule${affected.length === 1 ? "" : "s"} pointing at "${node.name}"`
@@ -951,7 +845,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [tree, nodes, rules, persistNodes, persistRules]
+    [tree, syncs, mutateNodes, mutateRules]
   );
 
   const deleteNode = useCallback(
@@ -960,185 +854,147 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
       if (!node || id === UNCATEGORIZED_ID) return 0;
       const parentId = node.parentId && tree.byId.has(node.parentId) ? node.parentId : null;
       const txnTarget = parentId ?? UNCATEGORIZED_ID;
-      let count = 0;
-      persistTxns(
-        stored.map((t) => {
-          if (t.categoryId !== id) return t;
-          count++;
-          return { ...t, categoryId: txnTarget };
-        })
-      );
-      persistNodes(
-        nodes
-          .filter((n) => n.id !== id)
-          .map((n) => (n.parentId === id ? { ...n, parentId } : n))
+      const count = syncs.txns.view.filter((t) => t.categoryId === id).length;
+      mutateTxns((prev) => prev.map((t) => (t.categoryId === id ? { ...t, categoryId: txnTarget } : t)));
+      mutateNodes((prev) =>
+        prev.filter((n) => n.id !== id).map((n) => (n.parentId === id ? { ...n, parentId } : n))
       );
       if (parentId) {
-        persistRules(rules.map((r) => (r.categoryId === id ? { ...r, categoryId: parentId } : r)));
+        mutateRules((prev) => prev.map((r) => (r.categoryId === id ? { ...r, categoryId: parentId } : r)));
       } else {
-        persistRules(rules.filter((r) => r.categoryId !== id));
+        mutateRules((prev) => prev.filter((r) => r.categoryId !== id));
       }
       return count;
     },
-    [tree, stored, nodes, rules, persistTxns, persistNodes, persistRules]
+    [tree, syncs, mutateTxns, mutateNodes, mutateRules]
   );
 
   // ---------- Category resolution (import flows) ----------
   const resolveCategory = useCallback(
-    (nameOrPath: string): string | undefined => {
-      const needle = nameOrPath.trim().toLowerCase();
-      if (!needle) return undefined;
-      // Exact path match first
-      for (const n of tree.nodes) {
-        if (tree.pathOf(n.id).toLowerCase() === needle) return n.id;
-      }
-      // Unique name match (prefer non-archived)
-      const byName = tree.nodes.filter((n) => n.name.toLowerCase() === needle);
-      const active = byName.filter((n) => !tree.isArchived(n.id));
-      const pool = active.length > 0 ? active : byName;
-      return pool.length === 1 ? pool[0].id : undefined;
-    },
+    (nameOrPath: string): string | undefined => resolveCategoryIn(tree, nameOrPath),
     [tree]
   );
 
   const ensureCategories = useCallback(
     (nameOrPaths: string[]): Record<string, string> => {
-      const result: Record<string, string> = {};
-      const nextNodes = [...nodes];
-      let cur: CategoryTree = buildTree(nextNodes);
-      for (const nameOrPath of nameOrPaths) {
-        const existing = resolveCategory(nameOrPath);
-        if (existing) {
-          result[nameOrPath] = existing;
-          continue;
-        }
-        // Create the path chain segment by segment
-        const segments = nameOrPath.split(PATH_SEP).map((s) => s.trim()).filter(Boolean);
-        if (segments.length === 0) {
-          result[nameOrPath] = UNCATEGORIZED_ID;
-          continue;
-        }
-        let parentId: string | null = null;
-        for (const seg of segments) {
-          const siblings: CategoryNode[] = cur.children.get(parentId) ?? [];
-          const found = siblings.find((s) => s.name.toLowerCase() === seg.toLowerCase());
-          if (found) {
-            parentId = found.id;
-          } else {
-            const node: CategoryNode = {
-              id: slugForName(seg, cur.byId.keys()),
-              parentId,
-              name: seg,
-              createdAt: new Date().toISOString(),
-            };
-            nextNodes.push(node);
-            parentId = node.id;
-            cur = buildTree(nextNodes);
-          }
-        }
-        result[nameOrPath] = parentId ?? UNCATEGORIZED_ID;
+      const { ids, created } = ensurePaths(syncs.nodes.view, nameOrPaths);
+      if (created.length > 0) {
+        mutateNodes((prev) => {
+          const have = new Set(prev.map((n) => n.id));
+          return [...prev, ...created.filter((n) => !have.has(n.id))];
+        });
       }
-      if (nextNodes.length !== nodes.length) persistNodes(nextNodes);
-      return result;
+      return ids;
     },
-    [nodes, resolveCategory, persistNodes]
+    [syncs, mutateNodes]
   );
 
   // ---------- Rules ----------
   const addRule = useCallback(
     (r: Omit<Rule, "id" | "createdAt">) => {
-      persistRules([...rules, { ...r, id: uid(), createdAt: new Date().toISOString() }]);
+      const rule = { ...r, id: uid(), createdAt: new Date().toISOString() };
+      mutateRules((prev) => [...prev, rule]);
     },
-    [rules, persistRules]
+    [mutateRules]
   );
 
   const updateRule = useCallback(
     (id: string, patch: Partial<Rule>) => {
-      persistRules(rules.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+      mutateRules((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
     },
-    [rules, persistRules]
+    [mutateRules]
   );
 
   const deleteRule = useCallback(
-    (id: string) => persistRules(rules.filter((r) => r.id !== id)),
-    [rules, persistRules]
+    (id: string) => mutateRules((prev) => prev.filter((r) => r.id !== id)),
+    [mutateRules]
   );
 
   const moveRuleBefore = useCallback(
     (id: string, beforeId: string) => {
       if (id === beforeId) return;
-      const rule = rules.find((r) => r.id === id);
-      if (!rule) return;
-      const rest = rules.filter((r) => r.id !== id);
-      const at = rest.findIndex((r) => r.id === beforeId);
-      if (at < 0) return;
-      persistRules([...rest.slice(0, at), rule, ...rest.slice(at)]);
+      mutateRules((prev) => {
+        const rule = prev.find((r) => r.id === id);
+        if (!rule) return prev;
+        const rest = prev.filter((r) => r.id !== id);
+        const at = rest.findIndex((r) => r.id === beforeId);
+        if (at < 0) return prev;
+        return [...rest.slice(0, at), rule, ...rest.slice(at)];
+      });
     },
-    [rules, persistRules]
+    [mutateRules]
   );
 
   const runRules = useCallback(
     (options: { overwrite?: boolean }) => {
-      const { updated, count, changes } = applyRules(
-        stored,
-        rules,
+      const { count, changes } = applyRules(
+        syncs.txns.view,
+        syncs.rules.view,
         (id) => tree.byId.has(id),
         options
       );
       if (count > 0) {
-        const byId = new Map(updated.map((t) => [t.id, t]));
-        persistTxns(stored.map((t) => byId.get(t.id) ?? t));
+        const target = new Map(changes.map((c) => [c.id, c.toCategoryId]));
+        mutateTxns((prev) =>
+          prev.map((t) => (target.has(t.id) ? { ...t, categoryId: target.get(t.id)! } : t))
+        );
       }
       return { count, changes };
     },
-    [stored, rules, tree, persistTxns]
+    [syncs, tree, mutateTxns]
   );
 
   // ---------- Import profiles ----------
   const saveImportProfile = useCallback(
     (p: ImportProfile) => {
-      const existing = importProfiles.findIndex((x) => x.id === p.id);
-      persistProfiles(
-        existing >= 0
-          ? importProfiles.map((x) => (x.id === p.id ? p : x))
-          : [...importProfiles, p]
+      mutateProfiles((prev) =>
+        prev.some((x) => x.id === p.id) ? prev.map((x) => (x.id === p.id ? p : x)) : [...prev, p]
       );
     },
-    [importProfiles, persistProfiles]
+    [mutateProfiles]
   );
 
   const deleteImportProfile = useCallback(
-    (id: string) => persistProfiles(importProfiles.filter((p) => p.id !== id)),
-    [importProfiles, persistProfiles]
+    (id: string) => mutateProfiles((prev) => prev.filter((p) => p.id !== id)),
+    [mutateProfiles]
   );
 
-  // ---------- Backup restore ----------
+  // ---------- Restore / upload ----------
   const replaceAllData = useCallback(
-    (data: {
-      transactions: StoredTransaction[];
-      nodes?: CategoryNode[];
-      rules?: Rule[];
-      importProfiles?: ImportProfile[];
-    }) => {
+    async (
+      data: {
+        transactions: StoredTransaction[];
+        nodes?: CategoryNode[];
+        rules?: Rule[];
+        importProfiles?: ImportProfile[];
+      },
+      reason: string
+    ) => {
       const norm = normalizeLoaded(data.transactions, data.nodes ?? []);
-      persistTxns(norm.txns);
-      persistNodes(norm.nodes);
-      persistRules(data.rules ?? []);
-      persistProfiles(data.importProfiles ?? []);
+      const texts = serializeWorkspace({
+        transactions: norm.txns,
+        nodes: norm.nodes,
+        rules: data.rules ?? [],
+        importProfiles: data.importProfiles ?? [],
+      });
+      await api.replaceWorkspace(texts, reason);
+      const ws = await api.getWorkspace();
+      for (const [name, state] of Object.entries(ws.files)) syncFor(name)?.replace(state);
     },
-    [persistTxns, persistNodes, persistRules, persistProfiles]
+    [syncFor]
   );
 
   const value: ExpenseContextType = {
     loading,
     error,
     workspaceStatus: wsStatus,
-    workspaceName: wsName,
     workspaceError: wsError,
-    chooseWorkspaceFolder,
-    reconnectWorkspace,
-    disconnectWorkspace,
-    reloadFromDisk,
+    syncStatus,
+    me,
+    dataDir,
+    reloadFromServer,
+    retryConnect,
+    lastChange,
     transactions,
     allTransactions,
     storedTransactions: stored,
