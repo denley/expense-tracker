@@ -680,10 +680,11 @@ export default function Transactions() {
                     title={allVisibleSelected ? "Deselect all" : `Select all ${filtered.length} filtered`}
                   />
                 </th>
-                <SortHeader field="date" sortField={sortField} sortDir={sortDir} onSort={toggleSort} />
+                {/* Description is the only column without w-px, so it takes the spare width */}
+                <SortHeader field="amount" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" alignRight />
                 <SortHeader field="description" sortField={sortField} sortDir={sortDir} onSort={toggleSort} />
-                <SortHeader field="category" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="hidden md:table-cell" />
-                <SortHeader field="amount" sortField={sortField} sortDir={sortDir} onSort={toggleSort} alignRight />
+                <SortHeader field="date" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" />
+                <SortHeader field="category" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px hidden md:table-cell" />
                 <th className="w-10" />
               </tr>
             </thead>
@@ -692,11 +693,10 @@ export default function Transactions() {
                 <Fragment key={t.id}>
                 {groupByDay && t.dateStr !== visible[i - 1]?.dateStr && (
                   <tr className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    <td colSpan={4} className={dayHeaderCell}>{formatDayHeading(t.date)}</td>
-                    <td className={cn(dayHeaderCell, "text-right tabular-nums normal-case")}>
+                    <td colSpan={2} className={cn(dayHeaderCell, "text-right tabular-nums normal-case")}>
                       {formatCurrency(dayTotals.get(t.dateStr) ?? 0)}
                     </td>
-                    <td className={dayHeaderCell} />
+                    <td colSpan={4} className={dayHeaderCell}>{formatDayHeading(t.date)}</td>
                   </tr>
                 )}
                 <tr
@@ -714,11 +714,18 @@ export default function Transactions() {
                       className="accent-[var(--color-eucalyptus)] cursor-pointer"
                     />
                   </td>
-                  {/* Grouped by day, the date lives in the day header */}
-                  <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap tabular-nums">
-                    {!groupByDay && formatDate(t.date)}
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-xs font-medium text-right whitespace-nowrap tabular-nums",
+                      t.amount < 0 ? "text-eucalyptus" : "text-foreground"
+                    )}
+                  >
+                    {formatCurrencyExact(t.amount)}
                   </td>
-                  <td className="px-3 py-2 text-xs text-foreground max-w-[280px]">
+                  {/* w-0 + min-w-full: the text never widens the column, it fills whatever
+                      width is spare and truncates */}
+                  <td className="px-3 py-2 text-xs text-foreground min-w-[180px]">
+                    <div className="w-0 min-w-full">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="truncate font-medium">{t.description}</span>
                       {duplicateIds.has(t.id) && (
@@ -733,6 +740,11 @@ export default function Transactions() {
                     {t.notes && (
                       <div className="truncate text-[10px] text-muted-foreground">{t.notes}</div>
                     )}
+                    </div>
+                  </td>
+                  {/* Grouped by day, the date lives in the day header */}
+                  <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap tabular-nums">
+                    {!groupByDay && formatDate(t.date)}
                   </td>
                   <td className="px-3 py-2 text-xs hidden md:table-cell whitespace-nowrap">
                     <div className="flex items-center gap-1.5">
@@ -757,14 +769,6 @@ export default function Transactions() {
                         </span>
                       )}
                     </div>
-                  </td>
-                  <td
-                    className={cn(
-                      "px-3 py-2 text-xs font-medium text-right whitespace-nowrap tabular-nums",
-                      t.amount < 0 ? "text-eucalyptus" : "text-foreground"
-                    )}
-                  >
-                    {formatCurrencyExact(t.amount)}
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center">
