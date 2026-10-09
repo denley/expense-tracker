@@ -4,6 +4,7 @@
   - Active state with eucalyptus accent
   - Compact on mobile (scrollable bottom bar), expanded on desktop (side rail)
 */
+import { useEffect, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Tags, Calendar, TrendingUp, Sun, Moon,
@@ -46,6 +47,18 @@ export default function Navigation() {
   const [location] = useLocation();
   const { theme, toggleTheme } = useTheme();
   const { scopeLabel, me, hideOneOffs, setHideOneOffs, hasOneOffSpend } = useExpenses();
+
+  // Publish the mobile top bar's height so sticky elements below it can sit flush
+  const topBar = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = topBar.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() =>
+      document.documentElement.style.setProperty("--mobile-topbar-h", `${el.offsetHeight}px`)
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const oneOffToggle = (hasOneOffSpend || hideOneOffs) && (
     <label
@@ -126,7 +139,7 @@ export default function Navigation() {
       </nav>
 
       {/* Mobile top bar with scope + theme */}
-      <div className="lg:hidden sticky top-0 z-40 bg-card/95 backdrop-blur border-b border-border px-4 py-2 flex items-center justify-between gap-3">
+      <div ref={topBar} className="lg:hidden sticky top-0 z-40 bg-card/95 backdrop-blur border-b border-border px-4 py-2 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-sm font-bold tracking-tight text-foreground leading-tight">Expense Tracker</h1>
           <SyncStatus className="text-[10px]" />

@@ -39,6 +39,8 @@ interface CategoryPickerProps {
   className?: string;
   autoFocus?: boolean;
   onBlur?: () => void;
+  /** Offer "＋ New category…" (off where the picker can't grow into a form) */
+  allowCreate?: boolean;
 }
 
 export function CategoryPicker({
@@ -50,6 +52,7 @@ export function CategoryPicker({
   className,
   autoFocus,
   onBlur,
+  allowCreate = true,
 }: CategoryPickerProps) {
   const { tree, addNode, pathOf } = useExpenses();
   const [creating, setCreating] = useState(false);
@@ -128,7 +131,7 @@ export function CategoryPicker({
           {optionLabel(node, depth)}
         </option>
       ))}
-      <option value={NEW_SENTINEL}>＋ New category…</option>
+      {allowCreate && <option value={NEW_SENTINEL}>＋ New category…</option>}
       {archived.length > 0 && (
         <optgroup label="Archived">
           {archived.map(({ node, depth }) => (

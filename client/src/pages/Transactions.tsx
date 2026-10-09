@@ -3,6 +3,8 @@
   The editing workhorse: filter by anything, sort, multi-select,
   bulk categorise / delete, inline row editing.
   Reads URL params: ?category= ?group= ?uncategorized=1 ?q=
+  Below md the table becomes TransactionMobileList (tap → TransactionSheet,
+  long-press → select) and the filters move into a bottom sheet.
 */
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
@@ -14,6 +16,8 @@ import SplitTransactionDialog from "@/components/SplitTransactionDialog";
 import RuleQuickDialog from "@/components/RuleQuickDialog";
 import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
 import ImportDialog from "@/components/ImportDialog";
+import TransactionMobileList from "@/components/TransactionMobileList";
+import TransactionSheet from "@/components/TransactionSheet";
 import { CategoryPicker, CategoryTreeDropdown } from "@/components/pickers";
 import { formatCurrency, formatCurrencyExact, formatDate, formatIsoDate } from "@/lib/utils";
 import { transactionsToPortableCsv } from "@/lib/export";
@@ -23,11 +27,17 @@ import { normalizeMerchant, ruleMatches, suggestPatternsForUncategorised, type R
 import {
   Search, ArrowUpDown, Plus, X, Trash2, Download, Filter,
   CheckSquare, PencilLine, Wand2, Copy, Lightbulb, Split, UploadCloud,
+  MoreHorizontal, SlidersHorizontal, ChevronDown,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/useMobile";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -37,12 +47,24 @@ type SortField = "date" | "amount" | "description" | "category";
 
 const PAGE_SIZE = 100;
 
+const SORT_OPTIONS: Array<{ value: `${SortField}-${"asc" | "desc"}`; label: string }> = [
+  { value: "date-desc", label: "Newest first" },
+  { value: "date-asc", label: "Oldest first" },
+  { value: "amount-desc", label: "Largest amount" },
+  { value: "amount-asc", label: "Smallest amount" },
+  { value: "description-asc", label: "Description A–Z" },
+  { value: "description-desc", label: "Description Z–A" },
+  { value: "category-asc", label: "Category A–Z" },
+  { value: "category-desc", label: "Category Z–A" },
+];
+
 export default function Transactions() {
   const {
     transactions, allTransactions, loading, accounts, accountCoverage, groupColors, tree, nameOf,
     updateTransactions, deleteTransactions, runRules, rules,
   } = useExpenses();
   const [location] = useLocation();
+  const isMobile = useIsMobile();
 
   // Filters (category = a node id; matching includes the whole subtree)
   const [search, setSearch] = useState("");
@@ -67,6 +89,12 @@ export default function Transactions() {
   // Edit dialog
   const [editTxn, setEditTxn] = useState<Transaction | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+
+  // Phone: row action sheet, filter sheet, collapsed rule suggestions
+  const [sheetTxn, setSheetTxn] = useState<Transaction | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   // Split dialog
   const [splitTxn, setSplitTxn] = useState<Transaction | null>(null);
@@ -148,6 +176,11 @@ export default function Transactions() {
   }, [transactions, search, category, tree, account, dateFrom, dateTo, uncatOnly, dupOnly, duplicateIds, sortField, sortDir]);
 
   const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount]);
+  const dayTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const t of filtered) totals.set(t.dateStr, (totals.get(t.dateStr) ?? 0) + t.amount);
+    return totals;
+  }, [filtered]);
   const filteredTotal = useMemo(() => filtered.reduce((s, t) => s + t.amount, 0), [filtered]);
   const uncatCount = useMemo(
     () => transactions.filter((t) => t.categoryId === UNCATEGORIZED_ID).length,
@@ -165,6 +198,9 @@ export default function Transactions() {
   );
 
   const hasFilters = !!(search || category || account || dateFrom || dateTo || uncatOnly || dupOnly);
+  const sheetFilterCount = [category, account, dateFrom || dateTo, uncatOnly, dupOnly].filter(Boolean).length;
+  const sortValue = `${sortField}-${sortDir}` as const;
+  const isDefaultSort = sortValue === "date-desc";
 
   const clearFilters = () => {
     setSearch(""); setCategory(""); setAccount("");
@@ -205,6 +241,13 @@ export default function Transactions() {
     }
   };
 
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
   const clearSelection = () => setSelected(new Set());
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
 
@@ -241,6 +284,33 @@ export default function Transactions() {
     toast.success(`Exported ${filtered.length} transactions`);
   };
 
+  const matchingRuleFor = (t: Transaction) => rules.find((r) => r.enabled && ruleMatches(r, t.description));
+
+  // Edit the rule that already catches this description, else draft one from it
+  const openRuleFor = (t: Transaction) => {
+    const rule = matchingRuleFor(t);
+    setRuleSeed(
+      rule
+        ? { pattern: rule.pattern, categoryId: rule.categoryId, edit: rule }
+        : { pattern: normalizeMerchant(t.description), categoryId: t.categoryId === UNCATEGORIZED_ID ? "" : t.categoryId }
+    );
+  };
+
+  // Rows load as the end of the list scrolls near (the button stays as a fallback);
+  // re-observing after each page re-checks whether the end is still in view
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+  const hasMore = filtered.length > visibleCount;
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setVisibleCount((c) => c + PAGE_SIZE); },
+      { rootMargin: "800px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMore, visibleCount]);
+
   const applyRulesNow = () => {
     const { count, changes } = runRules({});
     if (count > 0) {
@@ -256,7 +326,8 @@ export default function Transactions() {
 
   return (
     <div
-      className="space-y-4 relative"
+      // Room to scroll the last rows out from under the bulk bar
+      className={cn("space-y-4 relative", selected.size > 0 && "pb-36")}
       onDragEnter={(e) => { if (isCsvDrag(e)) { e.preventDefault(); setDragDepth((d) => d + 1); } }}
       onDragOver={(e) => { if (isCsvDrag(e)) e.preventDefault(); }}
       onDragLeave={(e) => { if (isCsvDrag(e)) setDragDepth((d) => Math.max(0, d - 1)); }}
@@ -282,9 +353,9 @@ export default function Transactions() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="flex flex-wrap items-center justify-between gap-3"
+        className="flex flex-wrap items-start md:items-center justify-between gap-3"
       >
-        <div>
+        <div className="flex-1 min-w-0 md:flex-initial">
           <h2 className="text-2xl font-bold tracking-tight text-foreground">Transactions</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
             {filtered.length} of {transactions.length} transactions
@@ -326,7 +397,7 @@ export default function Transactions() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => fileInput.current?.click()}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
+            className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
             title="Import a bank CSV — or just drop one anywhere on this page"
           >
             <UploadCloud className="w-3.5 h-3.5" />
@@ -346,7 +417,7 @@ export default function Transactions() {
           {rules.length > 0 && uncatCount > 0 && (
             <button
               onClick={applyRulesNow}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
+              className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
             >
               <Wand2 className="w-3.5 h-3.5" />
               Apply Rules
@@ -354,18 +425,41 @@ export default function Transactions() {
           )}
           <button
             onClick={exportFiltered}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
+            className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
           >
             <Download className="w-3.5 h-3.5" />
             Export
           </button>
           <button
             onClick={() => { setEditTxn(null); setDialogOpen(true); }}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+            className="flex items-center gap-1.5 px-3 py-2.5 md:py-2 rounded-lg text-sm md:text-xs font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
           >
-            <Plus className="w-3.5 h-3.5" />
+            <Plus className="w-4 h-4 md:w-3.5 md:h-3.5" />
             Add
           </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="md:hidden p-2.5 rounded-lg border border-border hover:bg-accent transition-colors"
+                aria-label="More actions"
+              >
+                <MoreHorizontal className="w-4 h-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => fileInput.current?.click()}>
+                <UploadCloud /> Import CSV
+              </DropdownMenuItem>
+              {rules.length > 0 && uncatCount > 0 && (
+                <DropdownMenuItem onSelect={applyRulesNow}>
+                  <Wand2 /> Apply Rules
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={exportFiltered}>
+                <Download /> Export {hasFilters ? "filtered" : "all"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </motion.div>
 
@@ -374,7 +468,7 @@ export default function Transactions() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.1 }}
-        className="bg-card rounded-xl border border-border p-3 space-y-2.5"
+        className="hidden md:block bg-card rounded-xl border border-border p-3 space-y-2.5"
       >
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[180px]">
@@ -442,6 +536,66 @@ export default function Transactions() {
         </div>
       </motion.div>
 
+      {/* Phone filter bar */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.1 }}
+        className="md:hidden space-y-2"
+      >
+        <div className="flex gap-2">
+          <div className="relative flex-1 min-w-0">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input
+              type="search"
+              placeholder="Search…"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setVisibleCount(PAGE_SIZE); }}
+              className="w-full pl-9 pr-3 py-2.5 text-base bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </div>
+          <button
+            onClick={() => setFiltersOpen(true)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 rounded-lg border text-sm font-medium transition-colors",
+              sheetFilterCount > 0 || !isDefaultSort
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-border bg-card text-foreground"
+            )}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+            Filters
+            {sheetFilterCount > 0 && (
+              <span className="min-w-5 h-5 px-1 rounded-full bg-primary text-primary-foreground text-[11px] leading-5 text-center">
+                {sheetFilterCount}
+              </span>
+            )}
+          </button>
+        </div>
+        {(sheetFilterCount > 0 || !isDefaultSort) && (
+          <div className="flex gap-1.5 overflow-x-auto -mx-4 px-4 pb-0.5">
+            {category && <FilterChip label={nameOf(category)} onRemove={() => setCategory("")} />}
+            {account && <FilterChip label={account} onRemove={() => setAccount("")} />}
+            {(dateFrom || dateTo) && (
+              <FilterChip
+                label={dateFrom && dateTo
+                  ? `${formatIsoDate(dateFrom)} – ${formatIsoDate(dateTo)}`
+                  : dateFrom ? `From ${formatIsoDate(dateFrom)}` : `Until ${formatIsoDate(dateTo)}`}
+                onRemove={() => { setDateFrom(""); setDateTo(""); }}
+              />
+            )}
+            {uncatOnly && <FilterChip label="Uncategorised" onRemove={() => setUncatOnly(false)} />}
+            {dupOnly && <FilterChip label="Possible duplicates" onRemove={() => setDupOnly(false)} />}
+            {!isDefaultSort && (
+              <FilterChip
+                label={SORT_OPTIONS.find((o) => o.value === sortValue)?.label ?? ""}
+                onRemove={() => { setSortField("date"); setSortDir("desc"); }}
+              />
+            )}
+          </div>
+        )}
+      </motion.div>
+
       {/* Suggested rules covering the uncategorised pile */}
       {ruleSuggestions.length > 0 && (
         <motion.div
@@ -450,11 +604,20 @@ export default function Transactions() {
           transition={{ duration: 0.5, delay: 0.12 }}
           className="bg-card rounded-xl border border-border p-3"
         >
-          <p className="flex items-center gap-1.5 text-xs font-medium text-foreground mb-2">
+          <p className="hidden md:flex items-center gap-1.5 text-xs font-medium text-foreground mb-2">
             <Lightbulb className="w-3.5 h-3.5 text-sandstone" />
             Suggested rules — keywords covering your uncategorised transactions (click to review)
           </p>
-          <div className="flex flex-wrap gap-1.5">
+          <button
+            onClick={() => setShowSuggestions(!showSuggestions)}
+            className="md:hidden flex w-full items-center gap-1.5 text-sm font-medium text-foreground"
+          >
+            <Lightbulb className="w-4 h-4 text-sandstone" />
+            {ruleSuggestions.length} suggested rule{ruleSuggestions.length === 1 ? "" : "s"}
+            <span className="text-xs font-normal text-muted-foreground">for uncategorised</span>
+            <ChevronDown className={cn("w-4 h-4 ml-auto text-muted-foreground transition-transform", showSuggestions && "rotate-180")} />
+          </button>
+          <div className={cn("flex-wrap gap-1.5 mt-2.5 md:mt-0", showSuggestions ? "flex" : "hidden md:flex")}>
             {ruleSuggestions.map((s) => (
               <button
                 key={s.pattern}
@@ -479,8 +642,24 @@ export default function Transactions() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.15 }}
-        className="bg-card rounded-xl border border-border overflow-hidden"
+        // overflow-clip (not hidden) keeps the phone list's sticky day headers working
+        className="bg-card rounded-xl border border-border overflow-clip"
       >
+        {isMobile ? (
+          <TransactionMobileList
+            rows={visible}
+            groupByDay={sortField === "date"}
+            dayTotals={dayTotals}
+            selected={selected}
+            duplicateIds={duplicateIds}
+            onOpen={(t) => { setSheetTxn(t); setSheetOpen(true); }}
+            onToggleSelect={(t) => toggleOne(t.id)}
+            onCategory={(t, id) => {
+              updateTransactions([t.id], { categoryId: id });
+              toast.success(`Categorised as ${nameOf(id)}`);
+            }}
+          />
+        ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -590,21 +769,10 @@ export default function Transactions() {
                   <td className="px-2 py-2">
                     <div className="flex items-center">
                       {(() => {
-                        const matchingRule = rules.find((r) => r.enabled && ruleMatches(r, t.description));
+                        const matchingRule = matchingRuleFor(t);
                         return (
                           <button
-                            onClick={() =>
-                              matchingRule
-                                ? setRuleSeed({
-                                    pattern: matchingRule.pattern,
-                                    categoryId: matchingRule.categoryId,
-                                    edit: matchingRule,
-                                  })
-                                : setRuleSeed({
-                                    pattern: normalizeMerchant(t.description),
-                                    categoryId: t.categoryId === UNCATEGORIZED_ID ? "" : t.categoryId,
-                                  })
-                            }
+                            onClick={() => openRuleFor(t)}
                             className={cn(
                               "p-1.5 rounded-md hover:bg-accent transition-colors",
                               matchingRule
@@ -642,6 +810,7 @@ export default function Transactions() {
             </tbody>
           </table>
         </div>
+        )}
 
         {visible.length === 0 && (
           <div className="py-16 text-center text-sm text-muted-foreground">
@@ -651,8 +820,8 @@ export default function Transactions() {
           </div>
         )}
 
-        {filtered.length > visibleCount && (
-          <div className="p-3 text-center border-t border-border">
+        {hasMore && (
+          <div ref={loadMoreRef} className="p-3 text-center border-t border-border">
             <button
               onClick={() => setVisibleCount(visibleCount + PAGE_SIZE)}
               className="px-4 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
@@ -682,12 +851,22 @@ export default function Transactions() {
                     · {formatCurrency(transactions.filter((t) => selected.has(t.id)).reduce((s, t) => s + t.amount, 0))}
                   </span>
                 </span>
-                <button
-                  onClick={clearSelection}
-                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-                >
-                  <X className="w-3 h-3" /> Clear
-                </button>
+                <div className="flex items-center gap-3">
+                  {selected.size < filtered.length && (
+                    <button
+                      onClick={() => setSelected(new Set(filtered.map((t) => t.id)))}
+                      className="md:hidden text-xs font-medium text-primary py-1"
+                    >
+                      Select all {filtered.length}
+                    </button>
+                  )}
+                  <button
+                    onClick={clearSelection}
+                    className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 py-1"
+                  >
+                    <X className="w-3 h-3" /> Clear
+                  </button>
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <CategoryPicker
@@ -695,17 +874,17 @@ export default function Transactions() {
                   onChange={setBulkCategory}
                   allowEmpty
                   emptyLabel="Choose category…"
-                  className="flex-1 min-w-[220px]"
+                  className="flex-1 basis-full md:basis-auto min-w-0 md:min-w-[220px] text-base md:text-sm"
                 />
                 <button
                   onClick={applyBulk}
-                  className="px-3.5 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:opacity-90"
+                  className="flex-1 md:flex-initial px-3.5 py-2.5 md:py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:opacity-90"
                 >
                   Apply to {selected.size}
                 </button>
                 <button
                   onClick={() => setConfirmDelete(true)}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-destructive border border-destructive/30 hover:bg-destructive/10"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 md:py-2 rounded-lg text-xs font-medium text-destructive border border-destructive/30 hover:bg-destructive/10"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Delete
@@ -737,6 +916,125 @@ export default function Transactions() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <TransactionSheet
+        transaction={sheetTxn}
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        matchingRule={sheetTxn ? matchingRuleFor(sheetTxn) : undefined}
+        onRule={() => sheetTxn && openRuleFor(sheetTxn)}
+        onSplit={() => setSplitTxn(sheetTxn)}
+        onEdit={() => { setEditTxn(sheetTxn); setDialogOpen(true); }}
+        onSelect={() => sheetTxn && toggleOne(sheetTxn.id)}
+      />
+
+      {/* Phone filters + sort */}
+      <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+        <SheetContent
+          side="bottom"
+          className="rounded-t-2xl max-h-[85vh] overflow-y-auto gap-0 pb-[max(0px,env(safe-area-inset-bottom))]"
+        >
+          <SheetHeader>
+            <SheetTitle>Filter & sort</SheetTitle>
+          </SheetHeader>
+          <div className="px-4 space-y-4">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Sort by</span>
+              <select
+                value={sortValue}
+                onChange={(e) => {
+                  const [field, dir] = e.target.value.split("-") as [SortField, "asc" | "desc"];
+                  setSortField(field);
+                  setSortDir(dir);
+                }}
+                className={cn(selectCls, "w-full text-base py-2.5")}
+              >
+                {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </label>
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Category</span>
+              <CategoryTreeDropdown
+                value={category}
+                onChange={setCategory}
+                allLabel="All categories"
+                className="!text-base"
+              />
+            </div>
+            {accounts.length > 0 && (
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Account</span>
+                <select
+                  value={account}
+                  onChange={(e) => setAccount(e.target.value)}
+                  className={cn(selectCls, "w-full text-base py-2.5")}
+                >
+                  <option value="">All accounts</option>
+                  {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </label>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block space-y-1.5 min-w-0">
+                <span className="text-xs font-medium text-muted-foreground">From</span>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className={cn(selectCls, "w-full text-base py-2.5")}
+                />
+              </label>
+              <label className="block space-y-1.5 min-w-0">
+                <span className="text-xs font-medium text-muted-foreground">To</span>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className={cn(selectCls, "w-full text-base py-2.5")}
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setUncatOnly(!uncatOnly)}
+                className={cn(
+                  "px-3.5 py-2 rounded-full text-sm font-medium border transition-colors",
+                  uncatOnly
+                    ? "bg-terracotta/10 border-terracotta/40 text-terracotta"
+                    : "border-border text-muted-foreground"
+                )}
+              >
+                Uncategorised only
+              </button>
+              <button
+                onClick={() => setDupOnly(!dupOnly)}
+                className={cn(
+                  "px-3.5 py-2 rounded-full text-sm font-medium border transition-colors",
+                  dupOnly
+                    ? "bg-sandstone/10 border-sandstone/40 text-sandstone"
+                    : "border-border text-muted-foreground"
+                )}
+              >
+                Possible duplicates
+              </button>
+            </div>
+          </div>
+          <SheetFooter className="flex-row">
+            <button
+              onClick={() => { clearFilters(); setSortField("date"); setSortDir("desc"); }}
+              className="flex-1 py-2.5 rounded-lg text-sm font-medium border border-border"
+            >
+              Reset
+            </button>
+            <button
+              onClick={() => setFiltersOpen(false)}
+              className="flex-[2] py-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground"
+            >
+              Show {filtered.length} transaction{filtered.length === 1 ? "" : "s"}
+            </button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
       <TransactionEditDialog open={dialogOpen} onOpenChange={setDialogOpen} transaction={editTxn} />
 
       <SplitTransactionDialog
@@ -761,5 +1059,17 @@ export default function Transactions() {
 
       <ImportDialog file={importFile} onClose={() => setImportFile(null)} onImported={onImported} />
     </div>
+  );
+}
+
+function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <button
+      onClick={onRemove}
+      className="inline-flex items-center gap-1 shrink-0 pl-3 pr-2 py-1.5 rounded-full border border-primary/30 bg-primary/5 text-xs font-medium text-primary"
+    >
+      {label}
+      <X className="w-3.5 h-3.5" />
+    </button>
   );
 }
