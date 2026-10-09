@@ -680,12 +680,13 @@ export default function Transactions() {
                     title={allVisibleSelected ? "Deselect all" : `Select all ${filtered.length} filtered`}
                   />
                 </th>
-                {/* w-px columns shrink to their content, so the spare width goes to Category
-                    and the amount stays next to its description */}
+                {/* w-px columns shrink to their content, so the spare width goes to Category,
+                    whose content sits right beside the actions: what happened on the left,
+                    what to do about it on the right */}
                 <SortHeader field="date" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" />
                 <SortHeader field="description" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" />
-                <SortHeader field="amount" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" alignRight />
-                <SortHeader field="category" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="hidden md:table-cell" />
+                <SortHeader field="amount" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px pl-8" alignRight />
+                <SortHeader field="category" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="hidden md:table-cell pl-6" alignRight />
                 <th className="w-px" />
               </tr>
             </thead>
@@ -740,15 +741,25 @@ export default function Transactions() {
                   </td>
                   <td
                     className={cn(
-                      "px-3 py-2 text-xs font-medium text-right whitespace-nowrap tabular-nums",
+                      "pl-8 pr-3 py-2 text-xs font-medium text-right whitespace-nowrap tabular-nums",
                       t.amount < 0 ? "text-eucalyptus" : "text-foreground"
                     )}
                   >
                     {formatCurrencyExact(t.amount)}
                   </td>
-                  {/* The group label wraps under the picker when space is tight */}
+                  {/* Right-aligned against the actions: "• Group  Category ⌄", picker last so the
+                      chevrons line up; the label is left out when it would repeat the category */}
                   <td className="pl-6 pr-3 py-2 text-xs hidden md:table-cell">
-                    <div className="flex flex-wrap items-center gap-x-1.5">
+                    <div className="flex flex-wrap items-center justify-end gap-x-1.5">
+                      {t.group !== t.category && (
+                        <span className="inline-flex items-center gap-1 whitespace-nowrap text-[10px] text-muted-foreground">
+                          <span
+                            className="w-1.5 h-1.5 rounded-full inline-block"
+                            style={{ backgroundColor: groupColors[t.group] }}
+                          />
+                          {t.group}
+                        </span>
+                      )}
                       <CategoryPicker
                         value={t.categoryId}
                         onChange={(id) => {
@@ -759,13 +770,6 @@ export default function Transactions() {
                           t.categoryId === UNCATEGORIZED_ID && "text-terracotta font-medium"
                         )}
                       />
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap text-[10px] text-muted-foreground">
-                        <span
-                          className="w-1.5 h-1.5 rounded-full inline-block"
-                          style={{ backgroundColor: groupColors[t.group] }}
-                        />
-                        {t.group}
-                      </span>
                     </div>
                   </td>
                   <td className="px-2 py-2">
@@ -1098,7 +1102,6 @@ function SortHeader({ field, sortField, sortDir, onSort, className, alignRight }
         "px-3 py-2.5 text-xs font-medium uppercase tracking-wider cursor-pointer hover:text-foreground select-none whitespace-nowrap",
         alignRight ? "text-right" : "text-left",
         active ? "text-foreground" : "text-muted-foreground",
-        field === "category" && "pl-6",
         className
       )}
       onClick={() => onSort(field)}
