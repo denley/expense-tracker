@@ -680,14 +680,11 @@ export default function Transactions() {
                     title={allVisibleSelected ? "Deselect all" : `Select all ${filtered.length} filtered`}
                   />
                 </th>
-                {/* w-px columns shrink to their content, so the spare width goes to Category,
-                    whose content sits right beside the actions: what happened on the left,
-                    what to do about it on the right */}
-                <SortHeader field="date" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" />
-                <SortHeader field="description" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" />
-                <SortHeader field="amount" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px pl-8" alignRight />
-                <SortHeader field="category" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="hidden md:table-cell pl-6" alignRight />
-                <th className="w-px" />
+                <SortHeader field="date" sortField={sortField} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader field="description" sortField={sortField} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader field="category" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="hidden md:table-cell" />
+                <SortHeader field="amount" sortField={sortField} sortDir={sortDir} onSort={toggleSort} alignRight />
+                <th className="w-10" />
               </tr>
             </thead>
             <tbody>
@@ -695,11 +692,11 @@ export default function Transactions() {
                 <Fragment key={t.id}>
                 {groupByDay && t.dateStr !== visible[i - 1]?.dateStr && (
                   <tr className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    <td colSpan={3} className={dayHeaderCell}>{formatDayHeading(t.date)}</td>
+                    <td colSpan={4} className={dayHeaderCell}>{formatDayHeading(t.date)}</td>
                     <td className={cn(dayHeaderCell, "text-right tabular-nums normal-case")}>
                       {formatCurrency(dayTotals.get(t.dateStr) ?? 0)}
                     </td>
-                    <td colSpan={2} className={dayHeaderCell} />
+                    <td className={dayHeaderCell} />
                   </tr>
                 )}
                 <tr
@@ -721,45 +718,24 @@ export default function Transactions() {
                   <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap tabular-nums">
                     {!groupByDay && formatDate(t.date)}
                   </td>
-                  <td className="px-3 py-2 text-xs text-foreground">
-                    <div className="w-[240px] lg:w-[300px] xl:w-[360px]">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="truncate font-medium">{t.description}</span>
-                        {duplicateIds.has(t.id) && (
-                          <span
-                            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sandstone/15 text-sandstone text-[9px] font-semibold uppercase tracking-wide shrink-0"
-                            title="Same date, amount and description as another transaction"
-                          >
-                            <Copy className="w-2.5 h-2.5" /> dup
-                          </span>
-                        )}
-                      </div>
-                      {t.notes && (
-                        <div className="truncate text-[10px] text-muted-foreground">{t.notes}</div>
-                      )}
-                    </div>
-                  </td>
-                  <td
-                    className={cn(
-                      "pl-8 pr-3 py-2 text-xs font-medium text-right whitespace-nowrap tabular-nums",
-                      t.amount < 0 ? "text-eucalyptus" : "text-foreground"
-                    )}
-                  >
-                    {formatCurrencyExact(t.amount)}
-                  </td>
-                  {/* Right-aligned against the actions: "• Group  Category ⌄", picker last so the
-                      chevrons line up; the label is left out when it would repeat the category */}
-                  <td className="pl-6 pr-3 py-2 text-xs hidden md:table-cell">
-                    <div className="flex flex-wrap items-center justify-end gap-x-1.5">
-                      {t.group !== t.category && (
-                        <span className="inline-flex items-center gap-1 whitespace-nowrap text-[10px] text-muted-foreground">
-                          <span
-                            className="w-1.5 h-1.5 rounded-full inline-block"
-                            style={{ backgroundColor: groupColors[t.group] }}
-                          />
-                          {t.group}
+                  <td className="px-3 py-2 text-xs text-foreground max-w-[280px]">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="truncate font-medium">{t.description}</span>
+                      {duplicateIds.has(t.id) && (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sandstone/15 text-sandstone text-[9px] font-semibold uppercase tracking-wide shrink-0"
+                          title="Same date, amount and description as another transaction"
+                        >
+                          <Copy className="w-2.5 h-2.5" /> dup
                         </span>
                       )}
+                    </div>
+                    {t.notes && (
+                      <div className="truncate text-[10px] text-muted-foreground">{t.notes}</div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs hidden md:table-cell whitespace-nowrap">
+                    <div className="flex items-center gap-1.5">
                       <CategoryPicker
                         value={t.categoryId}
                         onChange={(id) => {
@@ -770,7 +746,25 @@ export default function Transactions() {
                           t.categoryId === UNCATEGORIZED_ID && "text-terracotta font-medium"
                         )}
                       />
+                      {/* Left out when it would just repeat the category */}
+                      {t.group !== t.category && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                          <span
+                            className="w-1.5 h-1.5 rounded-full inline-block"
+                            style={{ backgroundColor: groupColors[t.group] }}
+                          />
+                          {t.group}
+                        </span>
+                      )}
                     </div>
+                  </td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-xs font-medium text-right whitespace-nowrap tabular-nums",
+                      t.amount < 0 ? "text-eucalyptus" : "text-foreground"
+                    )}
+                  >
+                    {formatCurrencyExact(t.amount)}
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center">
