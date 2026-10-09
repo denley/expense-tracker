@@ -10,7 +10,7 @@ import { useExpenses } from "@/contexts/ExpenseContext";
 import type { Transaction } from "@/lib/types";
 import { UNCATEGORIZED_ID } from "@/lib/tree";
 import { CategoryPicker } from "@/components/pickers";
-import { formatCurrency, formatCurrencyExact, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, formatCurrencyExact, formatDate, formatDayHeading, cn } from "@/lib/utils";
 import { Check, Copy } from "lucide-react";
 
 const LONG_PRESS_MS = 450;
@@ -59,7 +59,7 @@ export default function TransactionMobileList({
 function DayHeader({ date, total }: { date: Date; total: number }) {
   return (
     <div className="sticky top-[var(--mobile-topbar-h,0px)] z-10 flex items-center justify-between px-4 py-1.5 bg-secondary/95 backdrop-blur border-b border-border/50 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-      <span>{date.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</span>
+      <span>{formatDayHeading(date)}</span>
       <span className="tabular-nums normal-case">{formatCurrency(total)}</span>
     </div>
   );

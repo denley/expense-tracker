@@ -6,7 +6,7 @@
   Below md the table becomes TransactionMobileList (tap → TransactionSheet,
   long-press → select) and the filters move into a bottom sheet.
 */
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { Fragment, useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { Rule, Transaction } from "@/lib/types";
 import { UNCATEGORIZED_ID } from "@/lib/tree";
@@ -19,7 +19,7 @@ import ImportDialog from "@/components/ImportDialog";
 import TransactionMobileList from "@/components/TransactionMobileList";
 import TransactionSheet from "@/components/TransactionSheet";
 import { CategoryPicker, CategoryTreeDropdown } from "@/components/pickers";
-import { formatCurrency, formatCurrencyExact, formatDate, formatIsoDate } from "@/lib/utils";
+import { formatCurrency, formatCurrencyExact, formatDate, formatDayHeading, formatIsoDate } from "@/lib/utils";
 import { transactionsToPortableCsv } from "@/lib/export";
 import { downloadFile } from "@/lib/download";
 import { dedupKey } from "@/lib/csv";
@@ -322,6 +322,10 @@ export default function Transactions() {
 
   if (loading) return <LoadingState />;
 
+  // Opaque: sticky table cells stay stuck for the rest of the table, so each day's
+  // header covers the previous ones rather than pushing them off
+  const dayHeaderCell =
+    "sticky top-[var(--mobile-topbar-h,0px)] z-10 px-3 py-1.5 bg-secondary border-b border-border/50";
   const selectCls = "bg-background border border-border rounded-lg px-2.5 py-2 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30";
 
   return (
@@ -642,7 +646,7 @@ export default function Transactions() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.15 }}
-        // overflow-clip (not hidden) keeps the phone list's sticky day headers working
+        // overflow-clip (not hidden) keeps the sticky day headers working
         className="bg-card rounded-xl border border-border overflow-clip"
       >
         {isMobile ? (
@@ -660,7 +664,9 @@ export default function Transactions() {
             }}
           />
         ) : (
-        <div className="overflow-x-auto">
+        // Horizontal scroll only where the table can be too wide: a scroll container
+        // would also stop the day headers sticking, and from xl the columns always fit
+        <div className="overflow-x-auto xl:overflow-visible">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-secondary/40">
@@ -702,8 +708,17 @@ export default function Transactions() {
             </thead>
             <tbody>
               {visible.map((t, i) => (
+                <Fragment key={t.id}>
+                {sortField === "date" && t.dateStr !== visible[i - 1]?.dateStr && (
+                  <tr className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                    <td colSpan={4} className={dayHeaderCell}>{formatDayHeading(t.date)}</td>
+                    <td className={cn(dayHeaderCell, "text-right tabular-nums normal-case")}>
+                      {formatCurrency(dayTotals.get(t.dateStr) ?? 0)}
+                    </td>
+                    <td className={dayHeaderCell} />
+                  </tr>
+                )}
                 <tr
-                  key={t.id}
                   className={cn(
                     "border-b border-border/50 hover:bg-accent/50 transition-colors",
                     selected.has(t.id) && "bg-primary/5"
@@ -806,6 +821,7 @@ export default function Transactions() {
                     </div>
                   </td>
                 </tr>
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -932,6 +948,8 @@ export default function Transactions() {
         <SheetContent
           side="bottom"
           className="rounded-t-2xl max-h-[85vh] overflow-y-auto gap-0 pb-[max(0px,env(safe-area-inset-bottom))]"
+          // Focus the panel, not the sort select: phones open a focused select's picker
+          onOpenAutoFocus={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).focus(); }}
         >
           <SheetHeader>
             <SheetTitle>Filter & sort</SheetTitle>

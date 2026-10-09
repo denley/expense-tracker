@@ -41,6 +41,8 @@ export default function TransactionSheet({
       <SheetContent
         side="bottom"
         className="rounded-t-2xl max-h-[85vh] overflow-y-auto gap-0 pb-[max(1rem,env(safe-area-inset-bottom))]"
+        // Focus the panel, not the category select: phones open a focused select's picker
+        onOpenAutoFocus={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).focus(); }}
       >
         <SheetHeader className="pr-10">
           <SheetTitle className="text-base leading-snug break-words">{t.description}</SheetTitle>

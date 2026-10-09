@@ -43,6 +43,11 @@ export function formatDate(date: Date): string {
   });
 }
 
+/** Heading for a day's group in the transaction lists, e.g. "Thu, 9 Oct 2026" */
+export function formatDayHeading(date: Date): string {
+  return date.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+}
+
 /** formatDate for an ISO "yyyy-mm-dd" string (parsed as local, not UTC) */
 export function formatIsoDate(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
