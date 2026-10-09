@@ -25,7 +25,7 @@ import { downloadFile } from "@/lib/download";
 import { dedupKey } from "@/lib/csv";
 import { normalizeMerchant, ruleMatches, suggestPatternsForUncategorised, type RuleChange } from "@/lib/rules";
 import {
-  Search, ArrowUpDown, Plus, X, Trash2, Download, Filter,
+  Search, ArrowUpDown, ArrowUp, ArrowDown, Plus, X, Trash2, Download, Filter,
   CheckSquare, PencilLine, Wand2, Copy, Lightbulb, Split, UploadCloud,
   MoreHorizontal, SlidersHorizontal, ChevronDown,
 } from "lucide-react";
@@ -201,6 +201,7 @@ export default function Transactions() {
   const sheetFilterCount = [category, account, dateFrom || dateTo, uncatOnly, dupOnly].filter(Boolean).length;
   const sortValue = `${sortField}-${sortDir}` as const;
   const isDefaultSort = sortValue === "date-desc";
+  const groupByDay = sortField === "date";
 
   const clearFilters = () => {
     setSearch(""); setCategory(""); setAccount("");
@@ -652,7 +653,7 @@ export default function Transactions() {
         {isMobile ? (
           <TransactionMobileList
             rows={visible}
-            groupByDay={sortField === "date"}
+            groupByDay={groupByDay}
             dayTotals={dayTotals}
             selected={selected}
             duplicateIds={duplicateIds}
@@ -679,43 +680,25 @@ export default function Transactions() {
                     title={allVisibleSelected ? "Deselect all" : `Select all ${filtered.length} filtered`}
                   />
                 </th>
-                {(["date", "description", "category"] as SortField[]).map((f) => (
-                  <th
-                    key={f}
-                    className={cn(
-                      "text-left px-3 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider cursor-pointer hover:text-foreground select-none",
-                      f === "category" && "hidden md:table-cell"
-                    )}
-                    onClick={() => toggleSort(f)}
-                  >
-                    <span className="flex items-center gap-1">
-                      {f}
-                      <ArrowUpDown className="w-3 h-3" />
-                    </span>
-                  </th>
-                ))}
-                <th
-                  className="text-right px-3 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider cursor-pointer hover:text-foreground select-none"
-                  onClick={() => toggleSort("amount")}
-                >
-                  <span className="flex items-center justify-end gap-1">
-                    Amount
-                    <ArrowUpDown className="w-3 h-3" />
-                  </span>
-                </th>
-                <th className="w-10" />
+                {/* w-px columns shrink to their content, so the spare width goes to Category
+                    and the amount stays next to its description */}
+                <SortHeader field="date" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" />
+                <SortHeader field="description" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" />
+                <SortHeader field="amount" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="w-px" alignRight />
+                <SortHeader field="category" sortField={sortField} sortDir={sortDir} onSort={toggleSort} className="hidden md:table-cell" />
+                <th className="w-px" />
               </tr>
             </thead>
             <tbody>
               {visible.map((t, i) => (
                 <Fragment key={t.id}>
-                {sortField === "date" && t.dateStr !== visible[i - 1]?.dateStr && (
+                {groupByDay && t.dateStr !== visible[i - 1]?.dateStr && (
                   <tr className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    <td colSpan={4} className={dayHeaderCell}>{formatDayHeading(t.date)}</td>
+                    <td colSpan={3} className={dayHeaderCell}>{formatDayHeading(t.date)}</td>
                     <td className={cn(dayHeaderCell, "text-right tabular-nums normal-case")}>
                       {formatCurrency(dayTotals.get(t.dateStr) ?? 0)}
                     </td>
-                    <td className={dayHeaderCell} />
+                    <td colSpan={2} className={dayHeaderCell} />
                   </tr>
                 )}
                 <tr
@@ -733,27 +716,39 @@ export default function Transactions() {
                       className="accent-[var(--color-eucalyptus)] cursor-pointer"
                     />
                   </td>
+                  {/* Grouped by day, the date lives in the day header */}
                   <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap tabular-nums">
-                    {formatDate(t.date)}
+                    {!groupByDay && formatDate(t.date)}
                   </td>
-                  <td className="px-3 py-2 text-xs text-foreground max-w-[280px]">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="truncate font-medium">{t.description}</span>
-                      {duplicateIds.has(t.id) && (
-                        <span
-                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sandstone/15 text-sandstone text-[9px] font-semibold uppercase tracking-wide shrink-0"
-                          title="Same date, amount and description as another transaction"
-                        >
-                          <Copy className="w-2.5 h-2.5" /> dup
-                        </span>
+                  <td className="px-3 py-2 text-xs text-foreground">
+                    <div className="w-[240px] lg:w-[300px] xl:w-[360px]">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="truncate font-medium">{t.description}</span>
+                        {duplicateIds.has(t.id) && (
+                          <span
+                            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sandstone/15 text-sandstone text-[9px] font-semibold uppercase tracking-wide shrink-0"
+                            title="Same date, amount and description as another transaction"
+                          >
+                            <Copy className="w-2.5 h-2.5" /> dup
+                          </span>
+                        )}
+                      </div>
+                      {t.notes && (
+                        <div className="truncate text-[10px] text-muted-foreground">{t.notes}</div>
                       )}
                     </div>
-                    {t.notes && (
-                      <div className="truncate text-[10px] text-muted-foreground">{t.notes}</div>
-                    )}
                   </td>
-                  <td className="px-3 py-2 text-xs hidden md:table-cell whitespace-nowrap">
-                    <div className="flex items-center gap-1.5">
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-xs font-medium text-right whitespace-nowrap tabular-nums",
+                      t.amount < 0 ? "text-eucalyptus" : "text-foreground"
+                    )}
+                  >
+                    {formatCurrencyExact(t.amount)}
+                  </td>
+                  {/* The group label wraps under the picker when space is tight */}
+                  <td className="pl-6 pr-3 py-2 text-xs hidden md:table-cell">
+                    <div className="flex flex-wrap items-center gap-x-1.5">
                       <CategoryPicker
                         value={t.categoryId}
                         onChange={(id) => {
@@ -764,7 +759,7 @@ export default function Transactions() {
                           t.categoryId === UNCATEGORIZED_ID && "text-terracotta font-medium"
                         )}
                       />
-                      <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <span className="inline-flex items-center gap-1 whitespace-nowrap text-[10px] text-muted-foreground">
                         <span
                           className="w-1.5 h-1.5 rounded-full inline-block"
                           style={{ backgroundColor: groupColors[t.group] }}
@@ -772,14 +767,6 @@ export default function Transactions() {
                         {t.group}
                       </span>
                     </div>
-                  </td>
-                  <td
-                    className={cn(
-                      "px-3 py-2 text-xs font-medium text-right whitespace-nowrap tabular-nums",
-                      t.amount < 0 ? "text-eucalyptus" : "text-foreground"
-                    )}
-                  >
-                    {formatCurrencyExact(t.amount)}
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center">
@@ -1089,5 +1076,37 @@ function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }
       {label}
       <X className="w-3.5 h-3.5" />
     </button>
+  );
+}
+
+interface SortHeaderProps {
+  field: SortField;
+  sortField: SortField;
+  sortDir: "asc" | "desc";
+  onSort: (field: SortField) => void;
+  className?: string;
+  alignRight?: boolean;
+}
+
+/** Column header that sorts by its field; the active one shows its direction */
+function SortHeader({ field, sortField, sortDir, onSort, className, alignRight }: SortHeaderProps) {
+  const active = field === sortField;
+  const Icon = !active ? ArrowUpDown : sortDir === "desc" ? ArrowDown : ArrowUp;
+  return (
+    <th
+      className={cn(
+        "px-3 py-2.5 text-xs font-medium uppercase tracking-wider cursor-pointer hover:text-foreground select-none whitespace-nowrap",
+        alignRight ? "text-right" : "text-left",
+        active ? "text-foreground" : "text-muted-foreground",
+        field === "category" && "pl-6",
+        className
+      )}
+      onClick={() => onSort(field)}
+    >
+      <span className={cn("flex items-center gap-1", alignRight && "justify-end")}>
+        {field}
+        <Icon className={cn("w-3 h-3", !active && "opacity-40")} />
+      </span>
+    </th>
   );
 }
