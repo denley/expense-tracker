@@ -7,16 +7,20 @@
   - CategoryPicker: ANY node is selectable (filing at a parent level is a
     feature — refine later). Archived subtrees sink to a trailing "Archived"
     section; one-off ("project") subtrees cluster after regular ones at each
-    level (tree order). Creating a new category inline also asks where it goes.
+    level (tree order). "New category" opens NewCategoryDialog (name, where it
+    goes, one-off) seeded with the search text.
   - ParentPicker: choose a parent node (or top level) for create/move flows.
   - CategoryTreeDropdown: browse/filter chooser with (scoped) rolled-up totals.
   All match the app's compact form styling. Values are node ids.
 */
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { CategoryNode } from "@/lib/types";
-import { searchCategories } from "@/lib/tree";
+import { PATH_SEP, searchCategories, validateName } from "@/lib/tree";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { formatCurrency } from "@/lib/utils";
 import { ChevronsUpDown, CornerDownRight, Plus, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -63,6 +67,9 @@ function CategoryChooser({
   const [open, setOpen] = useState(false);
   // What the user typed on the closed button, to start the search with
   const [seed, setSeed] = useState("");
+  // "New category" waits for the popover to close: its focus return to the
+  // button would otherwise steal focus from whatever onCreate opens
+  const pendingCreate = useRef<string | null>(null);
 
   const onTriggerKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
     const typed = e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey;
@@ -108,6 +115,13 @@ function CategoryChooser({
           if (window.matchMedia?.("(pointer: coarse)").matches) return;
           (e.currentTarget as HTMLElement | null)?.querySelector("input")?.focus();
         }}
+        onCloseAutoFocus={(e) => {
+          const name = pendingCreate.current;
+          if (name === null) return;
+          pendingCreate.current = null;
+          e.preventDefault();
+          onCreate?.(name);
+        }}
       >
         <CategoryMenu
           {...menu}
@@ -120,8 +134,8 @@ function CategoryChooser({
           onCreate={
             onCreate &&
             ((name) => {
+              pendingCreate.current = name;
               setOpen(false);
-              onCreate(name);
             })
           }
         />
@@ -350,73 +364,162 @@ export function CategoryPicker({
   allowCreate = true,
   autoFocus,
 }: CategoryPickerProps) {
-  const { tree, addNode, pathOf } = useExpenses();
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newParent, setNewParent] = useState<string>(defaultNewParentId ?? "");
-
-  const commitCreate = () => {
-    const name = newName.trim();
-    if (!name) return;
-    const node = addNode(name, newParent || null);
-    if (!node) return; // validation toast already shown
-    onChange(node.id);
-    setCreating(false);
-    setNewName("");
-  };
-
-  if (creating) {
-    return (
-      <div className={cn("flex gap-1.5", className)}>
-        <input
-          autoFocus
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitCreate();
-            if (e.key === "Escape") setCreating(false);
-          }}
-          placeholder="New category…"
-          className={cn(inputCls, "flex-1 min-w-0")}
-        />
-        <ParentPicker
-          value={newParent}
-          onChange={setNewParent}
-          className="w-auto shrink-0 max-w-[45%]"
-        />
-        <button
-          onClick={commitCreate}
-          className="px-2.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium shrink-0"
-        >
-          Add
-        </button>
-      </div>
-    );
-  }
+  const { tree, pathOf } = useExpenses();
+  // Suggested name while the new-category dialog is open
+  const [creating, setCreating] = useState<string | null>(null);
 
   const node = value ? tree.byId.get(value) : undefined;
   const text = node
     ? `${node.name}${node.oneOff ? " ◈" : ""}`
     : value || (allowEmpty ? emptyLabel : "Choose category…");
   return (
-    <CategoryChooser
-      value={value}
-      onChange={onChange}
-      label={<span className={cn("flex-1 min-w-0 truncate", !value && "text-muted-foreground")}>{text}</span>}
-      title={node ? pathOf(value) : undefined}
-      className={className}
-      autoFocus={autoFocus}
-      emptyLabel={allowEmpty ? emptyLabel : undefined}
-      archivedLast
-      onCreate={
-        allowCreate
-          ? (name) => {
-              setNewName(name);
-              setCreating(true);
-            }
-          : undefined
-      }
-    />
+    <>
+      <CategoryChooser
+        value={value}
+        onChange={onChange}
+        label={<span className={cn("flex-1 min-w-0 truncate", !value && "text-muted-foreground")}>{text}</span>}
+        title={node ? pathOf(value) : undefined}
+        className={className}
+        autoFocus={autoFocus}
+        emptyLabel={allowEmpty ? emptyLabel : undefined}
+        archivedLast
+        onCreate={allowCreate ? setCreating : undefined}
+      />
+      {allowCreate && (
+        <NewCategoryDialog
+          open={creating !== null}
+          onOpenChange={(open) => !open && setCreating(null)}
+          initialName={creating ?? ""}
+          defaultParentId={defaultNewParentId}
+          onCreated={onChange}
+        />
+      )}
+    </>
+  );
+}
+
+interface NewCategoryDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initialName: string;
+  defaultParentId?: string | null;
+  /** Called with the new node's id once it's added */
+  onCreated: (categoryId: string) => void;
+}
+
+/** Name, place in the tree and one-off flag for a category made from a picker */
+export function NewCategoryDialog({
+  open,
+  onOpenChange,
+  initialName,
+  defaultParentId = null,
+  onCreated,
+}: NewCategoryDialogProps) {
+  const { tree, addNode, pathOf } = useExpenses();
+  const [name, setName] = useState("");
+  const [parent, setParent] = useState("");
+  const [oneOff, setOneOff] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setName(initialName);
+    setParent(defaultParentId && tree.byId.has(defaultParentId) ? defaultParentId : "");
+    setOneOff(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset on each open only
+  }, [open]);
+
+  const trimmed = name.trim();
+  const error = trimmed ? validateName(tree, trimmed, parent || null) : null;
+  // Inside a one-off subtree the new node is one-off anyway
+  const inheritsOneOff = !!parent && tree.isOneOff(parent);
+
+  const create = () => {
+    if (!trimmed || error) return;
+    const node = addNode(trimmed, parent || null, oneOff && !inheritsOneOff ? { oneOff: true } : undefined);
+    if (!node) return; // validation toast already shown
+    onCreated(node.id);
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="sm:max-w-[420px]"
+        // Caret after the suggested name (Radix would select it, so typing replaced it)
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          nameRef.current?.focus();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>New category</DialogTitle>
+          <DialogDescription>Pick where it sits in the tree; you can move it later.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-muted-foreground">Name</span>
+            <input
+              ref={nameRef}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  create();
+                }
+              }}
+              placeholder="e.g. Pets"
+              className={cn(inputCls, "text-base md:text-sm")}
+            />
+          </label>
+          <div className="space-y-1">
+            <span className="text-xs font-medium text-muted-foreground">Inside</span>
+            <ParentPicker value={parent} onChange={setParent} />
+          </div>
+          <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={oneOff || inheritsOneOff}
+              disabled={inheritsOneOff}
+              onChange={(e) => setOneOff(e.target.checked)}
+              className="accent-[var(--color-eucalyptus)]"
+            />
+            <span>
+              One-off cost centre ◈ <span className="text-muted-foreground">(a trip, a renovation…)</span>
+              {inheritsOneOff && <span className="text-muted-foreground"> — already, from its parent</span>}
+            </span>
+          </label>
+          {trimmed && (
+            <p className={cn("text-xs", error ? "text-terracotta" : "text-muted-foreground")}>
+              {error ?? (
+                <>
+                  Creates{" "}
+                  <span className="font-medium text-foreground">
+                    {parent ? `${pathOf(parent)}${PATH_SEP}${trimmed}` : trimmed}
+                  </span>
+                </>
+              )}
+            </p>
+          )}
+        </div>
+        <DialogFooter className="flex gap-2 sm:justify-end">
+          <button
+            onClick={() => onOpenChange(false)}
+            className="px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={create}
+            disabled={!trimmed || !!error}
+            className="px-4 py-2 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Create
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
