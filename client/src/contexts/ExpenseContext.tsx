@@ -48,6 +48,7 @@ import {
   validateName,
   resolveCategoryIn,
   ensurePaths,
+  frequentCategories,
   UNCATEGORIZED_ID,
   type CategoryTree,
 } from "@/lib/tree";
@@ -153,6 +154,8 @@ interface ExpenseContextType {
 
   // Per-node aggregates (scoped; NOT filtered by hideOneOffs — used by drill-down)
   nodeStats: Map<string, NodeStats>;
+  /** Most-used categories lately (all data, not scoped), for the pickers' "Frequently used" section */
+  frequentCategoryIds: string[];
   /** Scoped transactions with one-off subtrees removed when the toggle is on */
   analysisTransactions: Transaction[];
   /** nodeStats over analysisTransactions (identical to nodeStats when the toggle is off) */
@@ -601,6 +604,8 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     [tree]
   );
 
+  const frequentCategoryIds = useMemo(() => frequentCategories(tree, stored), [tree, stored]);
+
   /** All-nodes aggregates for the drill-down view (not filtered by hideOneOffs) */
   const nodeStats = useMemo(() => statsOver(transactions), [transactions, statsOver]);
 
@@ -1019,6 +1024,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     avgMonthlySpend,
     groupColors,
     nodeStats,
+    frequentCategoryIds,
     analysisTransactions,
     analysisNodeStats,
     accounts,

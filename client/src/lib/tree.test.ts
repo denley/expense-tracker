@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTree, searchCategories } from "./tree";
+import { buildTree, frequentCategories, searchCategories, UNCATEGORIZED_ID } from "./tree";
 import type { CategoryNode } from "./types";
 
 const nodes: CategoryNode[] = [
@@ -35,5 +35,42 @@ describe("searchCategories", () => {
 
   it("searches only the given candidates", () => {
     expect(ids("food", tree.nodes.filter((n) => n.id !== "food"))).toEqual(["eating-out", "groceries", "old-food"]);
+  });
+});
+
+describe("frequentCategories", () => {
+  const txn = (date: string, categoryId: string) => ({ date, categoryId });
+
+  it("ranks by uses in the window, ties to the most recent", () => {
+    const txns = [
+      txn("2026-10-01", "garden"),
+      txn("2026-10-02", "groceries"),
+      txn("2026-10-03", "groceries"),
+      txn("2026-10-04", "eating-out"),
+      txn("2026-10-05", "garden"),
+      txn("2026-10-06", "home"),
+    ];
+    expect(frequentCategories(tree, txns)).toEqual(["garden", "groceries", "home", "eating-out"]);
+    expect(frequentCategories(tree, txns, { limit: 2 })).toEqual(["garden", "groceries"]);
+  });
+
+  it("counts only the days up to the newest transaction", () => {
+    const txns = [
+      txn("2026-01-01", "garden"),
+      txn("2026-01-02", "garden"),
+      txn("2026-06-01", "groceries"),
+    ];
+    expect(frequentCategories(tree, txns, { days: 90 })).toEqual(["groceries"]);
+  });
+
+  it("skips uncategorised, archived and unknown categories", () => {
+    const txns = [
+      txn("2026-10-01", UNCATEGORIZED_ID),
+      txn("2026-10-01", "old-food"),
+      txn("2026-10-01", "gone"),
+      txn("2026-10-01", "food"),
+    ];
+    expect(frequentCategories(tree, txns)).toEqual(["food"]);
+    expect(frequentCategories(tree, [])).toEqual([]);
   });
 });

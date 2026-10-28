@@ -5,10 +5,12 @@
   chooser opens it with the search started; arrow keys + Enter pick. A search
   flattens the list to full-path matches (searchCategories in lib/tree).
   - CategoryPicker: ANY node is selectable (filing at a parent level is a
-    feature — refine later). Archived subtrees sink to a trailing "Archived"
-    section; one-off ("project") subtrees cluster after regular ones at each
-    level (tree order). "New category" opens NewCategoryDialog (name, where it
-    goes, one-off) seeded with the search text.
+    feature — refine later). The most-used categories lately head the list in a
+    "Frequently used" section (full paths) until a search starts. Archived
+    subtrees sink to a trailing "Archived" section; one-off ("project")
+    subtrees cluster after regular ones at each level (tree order). "New
+    category" opens NewCategoryDialog (name, where it goes, one-off) seeded
+    with the search text.
   - ParentPicker: choose a parent node (or top level) for create/move flows.
   - CategoryTreeDropdown: browse/filter chooser with (scoped) rolled-up totals.
   All match the app's compact form styling. Values are node ids.
@@ -43,6 +45,8 @@ interface CategoryChooserProps {
   nodes?: CategoryNode[];
   /** Archived subtrees in a trailing section instead of in place */
   archivedLast?: boolean;
+  /** Node ids listed above the tree under "Frequently used" while not searching */
+  frequent?: string[];
   /** Right-aligned detail per node row (e.g. totals) */
   detail?: (id: string) => ReactNode;
   /** Offer "＋ New category"; receives the search text as the suggested name */
@@ -146,11 +150,14 @@ function CategoryChooser({
 
 type MenuRow =
   | { kind: "empty" }
-  | { kind: "node"; node: CategoryNode; depth: number; archived: boolean }
+  | { kind: "node"; node: CategoryNode; depth: number; archived: boolean; frequent?: boolean }
   | { kind: "create" };
 
 interface CategoryMenuProps
-  extends Pick<CategoryChooserProps, "value" | "emptyLabel" | "emptyDetail" | "nodes" | "archivedLast" | "detail" | "onCreate"> {
+  extends Pick<
+    CategoryChooserProps,
+    "value" | "emptyLabel" | "emptyDetail" | "nodes" | "archivedLast" | "frequent" | "detail" | "onCreate"
+  > {
   initialQuery: string;
   onPick: (categoryId: string) => void;
 }
@@ -164,6 +171,14 @@ function scrollToRow(list: HTMLElement, row: HTMLElement, center: boolean) {
   else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
 }
 
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
 /** Search box + list; mounted fresh on every open */
 function CategoryMenu({
   value,
@@ -171,6 +186,7 @@ function CategoryMenu({
   emptyDetail,
   nodes,
   archivedLast,
+  frequent,
   detail,
   onCreate,
   initialQuery,
@@ -197,6 +213,11 @@ function CategoryMenu({
       for (const node of searchCategories(tree, q, candidates)) out.push(nodeRow(node, 0));
     } else {
       if (emptyLabel !== undefined) out.push({ kind: "empty" });
+      const allowed = new Set(candidates.map((n) => n.id));
+      for (const id of frequent ?? []) {
+        const node = tree.byId.get(id);
+        if (node && allowed.has(id)) out.push({ ...nodeRow(node, 0), frequent: true });
+      }
       const all = candidates.map((node) => nodeRow(node, tree.depthOf(node.id)));
       // Depth-first order, so archived subtrees stay whole when moved to the end
       if (archivedLast) out.push(...all.filter((r) => !r.archived), ...all.filter((r) => r.archived));
@@ -204,7 +225,7 @@ function CategoryMenu({
     }
     if (canCreate) out.push({ kind: "create" });
     return out;
-  }, [tree, nodes, q, emptyLabel, archivedLast, canCreate]);
+  }, [tree, nodes, q, emptyLabel, archivedLast, frequent, canCreate]);
 
   const selectedIndex = q
     ? 0
@@ -251,6 +272,7 @@ function CategoryMenu({
     onClick: () => choose(row),
   });
   const matches = rows.some((r) => r.kind === "node");
+  const hasFrequent = rows.some((r) => r.kind === "node" && r.frequent);
 
   return (
     <>
@@ -303,18 +325,19 @@ function CategoryMenu({
               </button>
             );
           }
-          const { node, depth, archived } = row;
+          const { node, depth, archived, frequent: isFrequent } = row;
           // In the trailing section the header already says so
           const inArchivedSection = archivedLast && !q && archived;
           const prev = rows[i - 1];
-          const firstArchived = inArchivedSection && !(prev?.kind === "node" && prev.archived);
+          const prevNode = prev?.kind === "node" ? prev : undefined;
+          const firstArchived = inArchivedSection && !prevNode?.archived;
+          const firstFrequent = isFrequent && !prevNode?.frequent;
+          const firstOfTree = hasFrequent && !isFrequent && !!prevNode?.frequent;
           return (
-            <div key={node.id}>
-              {firstArchived && (
-                <p className="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Archived
-                </p>
-              )}
+            <div key={isFrequent ? `frequent:${node.id}` : node.id}>
+              {firstFrequent && <SectionLabel>Frequently used</SectionLabel>}
+              {firstOfTree && <SectionLabel>All categories</SectionLabel>}
+              {firstArchived && <SectionLabel>Archived</SectionLabel>}
               <button
                 {...rowProps(i, row)}
                 className={cn(rowCls(i, node.id === value), archived && "opacity-50")}
@@ -322,7 +345,7 @@ function CategoryMenu({
               >
                 {depth > 0 && <CornerDownRight className="w-3 h-3 mr-1.5 shrink-0 text-muted-foreground/50" />}
                 <span className="truncate">
-                  {q ? tree.pathOf(node.id) : node.name}
+                  {q || isFrequent ? tree.pathOf(node.id) : node.name}
                   {node.oneOff ? " ◈" : ""}
                   {archived && !inArchivedSection ? " (archived)" : ""}
                 </span>
@@ -364,7 +387,7 @@ export function CategoryPicker({
   allowCreate = true,
   autoFocus,
 }: CategoryPickerProps) {
-  const { tree, pathOf } = useExpenses();
+  const { tree, pathOf, frequentCategoryIds } = useExpenses();
   // Suggested name while the new-category dialog is open
   const [creating, setCreating] = useState<string | null>(null);
 
@@ -383,6 +406,7 @@ export function CategoryPicker({
         autoFocus={autoFocus}
         emptyLabel={allowEmpty ? emptyLabel : undefined}
         archivedLast
+        frequent={frequentCategoryIds}
         onCreate={allowCreate ? setCreating : undefined}
       />
       {allowCreate && (

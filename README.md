@@ -33,7 +33,7 @@ Every transaction has exactly one category. Nothing double counts.
 ## Features
 
 ### Track & edit
-- **Transactions**: filter by search / category / account / date range, sort, multi-select, bulk categorise and delete, inline editing, manual entry, split one transaction into several categories
+- **Transactions**: filter by search / category / account / date range, sort, multi-select, bulk categorise and delete, inline editing, manual entry, split one transaction into several categories. The category picker lists your most-used categories of the last 90 days first
 - **CSV import**: drop any bank export; columns, date format (DMY/MDY/ISO) and sign conventions are detected. Mappings save as bank profiles that apply automatically to matching files. Duplicates (same date + amount + description) are skipped, foreign-currency files convert at a per-import rate, and a whole import can be filed into one category (e.g. a travel card into a trip)
 - **Categories**: drag-and-drop tree management, rename / merge / move / archive, live counts
 - **Rules**: "description contains X → category", applied on import or on demand, with suggestions mined from the uncategorised pile and from history, conflict and overlap inspection

@@ -225,6 +225,36 @@ export function searchCategories(
 }
 
 /**
+ * The categories filed on most in the `days` up to the newest transaction (not
+ * today, so a late import still counts), most used first; ties go to the most
+ * recently used. Skips Uncategorized, archived and unknown nodes. Feeds the
+ * choosers' "Frequently used" section.
+ */
+export function frequentCategories(
+  tree: CategoryTree,
+  txns: ReadonlyArray<{ date: string; categoryId: string }>,
+  { limit = 6, days = 90 }: { limit?: number; days?: number } = {}
+): string[] {
+  let newest = "";
+  for (const t of txns) if (t.date > newest) newest = t.date;
+  if (!newest) return [];
+  const cutoff = new Date(Date.parse(newest) - days * 86_400_000).toISOString().slice(0, 10);
+  const uses = new Map<string, { count: number; last: string }>();
+  for (const t of txns) {
+    if (t.date <= cutoff || t.categoryId === UNCATEGORIZED_ID) continue;
+    if (!tree.byId.has(t.categoryId) || tree.isArchived(t.categoryId)) continue;
+    const u = uses.get(t.categoryId) ?? { count: 0, last: "" };
+    u.count++;
+    if (t.date > u.last) u.last = t.date;
+    uses.set(t.categoryId, u);
+  }
+  return [...uses]
+    .sort(([, a], [, b]) => b.count - a.count || b.last.localeCompare(a.last))
+    .slice(0, limit)
+    .map(([id]) => id);
+}
+
+/**
  * Resolve a node id, full path ("Travel > Japan 2026 > Food") or unique name
  * to a node id. Names prefer non-archived nodes; ambiguous names don't resolve.
  */
