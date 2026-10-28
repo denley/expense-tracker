@@ -197,6 +197,34 @@ export function validateName(
 }
 
 /**
+ * Category search for the choosers: every word of the query must appear in the
+ * node's full path ("food gro" finds "Food > Groceries"). Nodes whose own name
+ * matches come first (name prefix before name contains), then the rest; archived
+ * nodes go last. Ties keep display order. `among` limits the candidates.
+ */
+export function searchCategories(
+  tree: CategoryTree,
+  query: string,
+  among: CategoryNode[] = tree.nodes
+): CategoryNode[] {
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t && t !== PATH_SEP.trim());
+  if (terms.length === 0) return among;
+  const phrase = terms.join(" ");
+  const ranked: Array<{ node: CategoryNode; rank: number }> = [];
+  for (const node of among) {
+    const path = tree.pathOf(node.id).toLowerCase();
+    if (!terms.every((t) => path.includes(t))) continue;
+    const name = node.name.toLowerCase();
+    const nameRank = name.startsWith(phrase) ? 0 : terms.every((t) => name.includes(t)) ? 1 : 2;
+    ranked.push({ node, rank: nameRank + (tree.isArchived(node.id) ? 3 : 0) });
+  }
+  return ranked.sort((a, b) => a.rank - b.rank).map((r) => r.node);
+}
+
+/**
  * Resolve a node id, full path ("Travel > Japan 2026 > Food") or unique name
  * to a node id. Names prefer non-archived nodes; ambiguous names don't resolve.
  */

@@ -3,9 +3,10 @@
   two-line rows — description + amount, then category chip + account/notes —
   under sticky day headers when sorted by date. Tap opens the row's action
   sheet; long-press starts selecting, after which taps toggle. The category
-  chip is a transparent native select, so tapping it opens the OS picker.
+  chip has a transparent CategoryPicker over it, so tapping it opens the
+  searchable category list.
 */
-import { useRef } from "react";
+import { useRef, type SyntheticEvent } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { Transaction } from "@/lib/types";
 import { UNCATEGORIZED_ID } from "@/lib/tree";
@@ -89,6 +90,11 @@ function Row({ t, showDate, selecting, isSelected, isDuplicate, onTap, onLongPre
   };
 
   const uncategorised = t.categoryId === UNCATEGORIZED_ID;
+  // The picker's popover is portalled out of the row but React still bubbles its
+  // events through here: the row ignores them, and they must keep propagating
+  // natively (Radix watches the document to close the popover on outside taps).
+  const fromPortal = (e: SyntheticEvent) => !e.currentTarget.contains(e.target as Node);
+  const stopOwn = (e: SyntheticEvent) => { if (!fromPortal(e)) e.stopPropagation(); };
   const meta = [showDate ? formatDate(t.date) : "", t.account, t.notes].filter(Boolean).join(" · ");
 
   return (
@@ -96,6 +102,7 @@ function Row({ t, showDate, selecting, isSelected, isDuplicate, onTap, onLongPre
       role="button"
       tabIndex={0}
       onPointerDown={(e) => {
+        if (fromPortal(e)) return;
         pressed.current = false;
         start.current = { x: e.clientX, y: e.clientY };
         timer.current = window.setTimeout(() => {
@@ -112,11 +119,16 @@ function Row({ t, showDate, selecting, isSelected, isDuplicate, onTap, onLongPre
       onPointerCancel={cancel}
       onPointerLeave={cancel}
       onContextMenu={(e) => e.preventDefault()}
-      onClick={() => {
+      onClick={(e) => {
+        if (fromPortal(e)) return;
         if (pressed.current) { pressed.current = false; return; }
         onTap();
       }}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onTap(); } }}
+      // Only the row's own key presses (not ones from the category picker inside it)
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onTap(); }
+      }}
       className={cn(
         "flex items-center gap-3 px-4 py-3 border-b border-border/50 select-none [-webkit-touch-callout:none] active:bg-accent/60 transition-colors",
         isSelected && "bg-primary/5"
@@ -152,8 +164,8 @@ function Row({ t, showDate, selecting, isSelected, isDuplicate, onTap, onLongPre
         <div className="flex items-center gap-2 min-w-0 text-xs text-muted-foreground">
           <span
             // The chip's picker is its own tap target, not a row tap
-            onClick={selecting ? undefined : (e) => e.stopPropagation()}
-            onPointerDown={selecting ? undefined : (e) => e.stopPropagation()}
+            onClick={selecting ? undefined : stopOwn}
+            onPointerDown={selecting ? undefined : stopOwn}
             className={cn(
               "relative inline-flex items-center gap-1.5 max-w-[60%] shrink-0 px-2 py-0.5 rounded-full border",
               uncategorised
@@ -165,7 +177,7 @@ function Row({ t, showDate, selecting, isSelected, isDuplicate, onTap, onLongPre
               <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: groupColors[t.group] }} />
             )}
             <span className="truncate">{t.category}</span>
-            {/* Invisible native select over the chip; while selecting, taps fall through to the row */}
+            {/* Invisible picker button over the chip; while selecting, taps fall through to the row */}
             <CategoryPicker
               value={t.categoryId}
               onChange={(id) => { if (id !== t.categoryId) onCategory(id); }}
