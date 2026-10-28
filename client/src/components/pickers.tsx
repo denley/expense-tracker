@@ -44,6 +44,8 @@ interface CategoryChooserProps {
   /** Offer "＋ New category"; receives the search text as the suggested name */
   onCreate?: (name: string) => void;
   contentClassName?: string;
+  /** Focus the button on mount, so typing starts a search */
+  autoFocus?: boolean;
 }
 
 /** Button + popover shared by every chooser below */
@@ -55,6 +57,7 @@ function CategoryChooser({
   className,
   contentClassName,
   onCreate,
+  autoFocus,
   ...menu
 }: CategoryChooserProps) {
   const [open, setOpen] = useState(false);
@@ -84,6 +87,7 @@ function CategoryChooser({
         <button
           type="button"
           title={title}
+          autoFocus={autoFocus}
           onKeyDown={onTriggerKeyDown}
           className={cn(inputCls, "flex items-center gap-2 text-left", className)}
         >
@@ -332,6 +336,8 @@ interface CategoryPickerProps {
   className?: string;
   /** Offer "＋ New category…" (off where the picker can't grow into a form) */
   allowCreate?: boolean;
+  /** Focus on mount, so typing starts a search */
+  autoFocus?: boolean;
 }
 
 export function CategoryPicker({
@@ -342,6 +348,7 @@ export function CategoryPicker({
   defaultNewParentId = null,
   className,
   allowCreate = true,
+  autoFocus,
 }: CategoryPickerProps) {
   const { tree, addNode, pathOf } = useExpenses();
   const [creating, setCreating] = useState(false);
@@ -398,6 +405,7 @@ export function CategoryPicker({
       label={<span className={cn("flex-1 min-w-0 truncate", !value && "text-muted-foreground")}>{text}</span>}
       title={node ? pathOf(value) : undefined}
       className={className}
+      autoFocus={autoFocus}
       emptyLabel={allowEmpty ? emptyLabel : undefined}
       archivedLast
       onCreate={

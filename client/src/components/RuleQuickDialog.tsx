@@ -2,7 +2,7 @@
   Create or edit an auto-categorisation rule:
   - editable match pattern (pre-filled with the normalized merchant name, or the
     rule being edited), with an optional regex mode
-  - category to assign
+  - category to assign (focused when creating from a merchant, so typing searches)
   - live preview of every transaction the pattern matches, split into
     uncategorised / already this category / categorised differently
   - save the rule alone, or save it and categorise the matches now
@@ -46,6 +46,10 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
     setIsRegex(editRule?.isRegex ?? false);
     setReassignOthers(false);
   }, [open, seedPattern, seedCategoryId, editRule]);
+
+  // A new rule with its pattern already filled in only needs the category: start
+  // there (typing searches). Editing, or with no pattern yet, start at the pattern.
+  const focusCategory = !editRule && seedPattern.trim() !== "";
 
   const trimmed = pattern.trim();
   const tooShort = trimmed.length < 3;
@@ -152,7 +156,7 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
                 Description {isRegex ? "matches regex" : "contains"}
               </label>
               <input
-                autoFocus
+                autoFocus={!focusCategory}
                 value={pattern}
                 onChange={(e) => setPattern(e.target.value)}
                 placeholder='e.g. "WOOLWORTHS"'
@@ -172,7 +176,13 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
               <label className="text-xs font-medium text-muted-foreground mb-1 block">
                 Assign category
               </label>
-              <CategoryPicker value={categoryId} onChange={setCategoryId} allowEmpty emptyLabel="Choose category…" />
+              <CategoryPicker
+                value={categoryId}
+                onChange={setCategoryId}
+                allowEmpty
+                emptyLabel="Choose category…"
+                autoFocus={focusCategory}
+              />
             </div>
           </div>
 
