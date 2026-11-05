@@ -13,7 +13,7 @@ import ChartCard from "@/components/ChartCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import HeroBackdrop from "@/components/HeroBackdrop";
-import { formatCurrency, formatCurrencyExact, formatDate, formatPercent, formatAxisDollars } from "@/lib/utils";
+import { formatCurrency, formatCurrencyExact, formatDate, formatPercent, formatAxisDollars, formatMonthYear } from "@/lib/utils";
 import { TrendingUp, Repeat, Zap, ArrowUpRight, ArrowUpDown } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -207,6 +207,17 @@ export default function Trends() {
         <ChartCard
           title="Monthly Actuals vs. Rolling 3-Month Average"
           subtitle="Click a month to drill down into its breakdown"
+          viewKey="trends-rolling"
+          table={{
+            columns: [
+              { label: "Month", cell: (r: (typeof rollingAvgData)[number]) => formatMonthYear(r.monthKey) },
+              { label: "Spend", align: "right", cell: (r: (typeof rollingAvgData)[number]) => formatCurrency(r.actual) },
+              { label: "3-month average", align: "right", cell: (r: (typeof rollingAvgData)[number]) => formatCurrency(r.rolling3m) },
+            ],
+            rows: [...rollingAvgData].reverse(),
+            rowKey: (r: (typeof rollingAvgData)[number]) => r.monthKey,
+            onRowClick: (r: (typeof rollingAvgData)[number]) => navigate(`/monthly?month=${r.monthKey}`),
+          }}
         >
           <div className="h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -277,7 +288,29 @@ export default function Trends() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.2 }}
       >
-        <ChartCard title="Month-over-Month Change" subtitle="Click a bar to view that month's breakdown">
+        <ChartCard
+          title="Month-over-Month Change"
+          subtitle="Click a bar to view that month's breakdown"
+          viewKey="trends-mom"
+          table={{
+            columns: [
+              { label: "Month", cell: (r: (typeof momChanges)[number]) => formatMonthYear(r.monthKey) },
+              { label: "Spend", align: "right", cell: (r: (typeof momChanges)[number]) => formatCurrency(r.total) },
+              {
+                label: "Change",
+                align: "right",
+                cell: (r: (typeof momChanges)[number]) => (
+                  <span className={r.change > 0 ? "text-terracotta" : r.change < 0 ? "text-eucalyptus" : "text-muted-foreground"}>
+                    {r.change > 0 ? "+" : ""}{formatCurrency(r.change)}
+                  </span>
+                ),
+              },
+            ],
+            rows: [...momChanges].reverse(),
+            rowKey: (r: (typeof momChanges)[number]) => r.monthKey,
+            onRowClick: (r: (typeof momChanges)[number]) => navigate(`/monthly?month=${r.monthKey}`),
+          }}
+        >
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={momChanges.slice(1)} barCategoryGap="20%" onClick={handleMomClick} className="cursor-pointer">

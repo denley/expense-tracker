@@ -13,12 +13,13 @@
 import { useMemo, useCallback } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import StatCard from "@/components/StatCard";
-import ChartCard from "@/components/ChartCard";
+import ChartCard, { ColorLabel } from "@/components/ChartCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import HeroBackdrop from "@/components/HeroBackdrop";
 import { formatCurrency, formatCurrencyExact, formatPercent, formatAxisDollars } from "@/lib/utils";
-import { CHART_HEX_COLORS, type MonthlyData } from "@/lib/types";
+import type { MonthlyData } from "@/lib/types";
+import { formatMonthYear } from "@/lib/utils";
 import { DollarSign, ShoppingCart, TrendingUp, Receipt, UploadCloud } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -33,7 +34,7 @@ export default function Dashboard() {
   const {
     transactions, loading, totalSpend, monthlyData, groupData,
     avgMonthlySpend, yearScope, scopeLabel, allTransactions, groupColors,
-    nameOf, analysisTransactions,
+    nameOf, pathOf, colorOf, analysisTransactions,
   } = useExpenses();
   const [, navigate] = useLocation();
 
@@ -113,13 +114,15 @@ export default function Dashboard() {
   );
 
   const top15Categories = useMemo(
-    () => categoryTotals.slice(0, 15).map((c, i) => ({
+    () => categoryTotals.slice(0, 15).map((c) => ({
       id: c.id,
       name: c.name,
       total: Math.round(c.total),
-      fill: CHART_HEX_COLORS[i % CHART_HEX_COLORS.length],
+      exact: c.total,
+      // The category's own colour (shared by every chart), not its rank
+      fill: colorOf(c.id),
     })),
-    [categoryTotals]
+    [categoryTotals, colorOf]
   );
 
   const cumulativeData = useMemo(() => {
@@ -129,6 +132,8 @@ export default function Dashboard() {
       return {
         name: m.label,
         cumulative: Math.round(cumulative),
+        exact: cumulative,
+        month: m,
         monthKey: m.month,
       };
     });
@@ -289,6 +294,17 @@ export default function Dashboard() {
           className="lg:col-span-2"
         >
           <ChartCard
+            viewKey="dashboard-monthly"
+            table={{
+              columns: [
+                { label: "Month", cell: (m: MonthlyData) => `${formatMonthYear(m.month)}${m.partial ? " (so far)" : ""}` },
+                { label: "Transactions", align: "right", cell: (m: MonthlyData) => m.count },
+                { label: "Spend", align: "right", cell: (m: MonthlyData) => formatCurrencyExact(m.total) },
+              ],
+              rows: [...monthlyData].reverse(),
+              rowKey: (m: MonthlyData) => m.month,
+              onRowClick: (m: MonthlyData) => navigate(`/monthly?month=${m.month}`),
+            }}
             title="Monthly Spending"
             subtitle={[
               highestMonth && `Highest: ${highestMonth.label} (${formatCurrency(highestMonth.total)})`,
@@ -349,7 +365,21 @@ export default function Dashboard() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
         >
-          <ChartCard title="Spending by Group" subtitle="Click a segment to explore categories">
+          <ChartCard
+            title="Spending by Group"
+            subtitle="Click a segment to explore categories"
+            viewKey="dashboard-groups"
+            table={{
+              columns: [
+                { label: "Group", cell: (g: (typeof groupData)[number]) => <ColorLabel color={colorOf(g.id)}>{g.name}</ColorLabel> },
+                { label: "Spend", align: "right", cell: (g: (typeof groupData)[number]) => formatCurrencyExact(g.total) },
+                { label: "Share", align: "right", cell: (g: (typeof groupData)[number]) => (totalSpend > 0 ? formatPercent((g.total / totalSpend) * 100) : "—") },
+              ],
+              rows: groupData,
+              rowKey: (g: (typeof groupData)[number]) => g.id,
+              onRowClick: (g: (typeof groupData)[number]) => navigate(`/categories?category=${encodeURIComponent(g.id)}`),
+            }}
+          >
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -395,7 +425,20 @@ export default function Dashboard() {
           transition={{ duration: 0.5, delay: 0.4 }}
           className="lg:col-span-2"
         >
-          <ChartCard title="Top 15 Categories" subtitle="Click a bar to view category details">
+          <ChartCard
+            title="Top 15 Categories"
+            subtitle="Click a bar to view category details"
+            viewKey="dashboard-top-categories"
+            table={{
+              columns: [
+                { label: "Category", cell: (c: (typeof top15Categories)[number]) => <ColorLabel color={c.fill}>{pathOf(c.id)}</ColorLabel> },
+                { label: "Spend", align: "right", cell: (c: (typeof top15Categories)[number]) => formatCurrencyExact(c.exact) },
+              ],
+              rows: top15Categories,
+              rowKey: (c: (typeof top15Categories)[number]) => c.id,
+              onRowClick: (c: (typeof top15Categories)[number]) => navigate(`/categories?category=${encodeURIComponent(c.id)}`),
+            }}
+          >
             <div className="h-[420px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
@@ -438,7 +481,21 @@ export default function Dashboard() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.5 }}
         >
-          <ChartCard title="Cumulative Spend" subtitle="Click a point to view that month">
+          <ChartCard
+            title="Cumulative Spend"
+            subtitle="Click a point to view that month"
+            viewKey="dashboard-cumulative"
+            table={{
+              columns: [
+                { label: "Month", cell: (r: (typeof cumulativeData)[number]) => formatMonthYear(r.monthKey) },
+                { label: "Month's spend", align: "right", cell: (r: (typeof cumulativeData)[number]) => formatCurrencyExact(r.month.total) },
+                { label: "Running total", align: "right", cell: (r: (typeof cumulativeData)[number]) => formatCurrencyExact(r.exact) },
+              ],
+              rows: [...cumulativeData].reverse(),
+              rowKey: (r: (typeof cumulativeData)[number]) => r.monthKey,
+              onRowClick: (r: (typeof cumulativeData)[number]) => navigate(`/monthly?month=${r.monthKey}`),
+            }}
+          >
             <div className="h-[420px]">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart

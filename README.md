@@ -26,7 +26,7 @@ Money is broken down into one category tree, so every chart partitions cleanly:
 
 - **Top-level categories** are the chart buckets ("where did my money go?"): Groceries, Home, Travel…
 - **Sub-categories** nest to any depth; a transaction can be filed on any node, and reports roll descendants up into ancestors.
-- **One-off cost centres** ("projects": a trip, a renovation, a baby) are nodes flagged `OneOff`, with optional budget and colour. They cluster at the end of pickers and can be hidden from trend analysis. **Archive** one when it's over: it drops out of pickers and suggestions, its rules are disabled, history stays.
+- **One-offs** (a trip, a renovation, a baby) are ordinary nodes flagged `OneOff`, with an optional colour. They cluster at the end of pickers and can be hidden from trend analysis. **Archive** one when it's over: it drops out of pickers and suggestions, its rules are disabled, history stays.
 
 Every transaction has exactly one category. Nothing double counts.
 
@@ -39,7 +39,8 @@ Every transaction has exactly one category. Nothing double counts.
 - **Rules**: "description contains X → category", applied on import or on demand, with suggestions mined from the uncategorised pile and from history, conflict and overlap inspection
 
 ### Analyse
-- **Dashboard**: KPIs, monthly trend, category doughnut, top categories, cumulative spend, one-off budgets
+- **Dashboard**: KPIs, monthly trend, category doughnut, top categories, cumulative spend
+- **Consistent colours**: a category has one colour everywhere (its own, else its top-level group's), and every chart can switch to a table of the same numbers
 - **Categories / Monthly / Trends**: drill-down pages with cross-navigation
 - **Compare**: any two periods side by side, year-over-year presets, delta table, calendar heatmaps
 - **Time scope**: all time, a year, or a custom range

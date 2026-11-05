@@ -9,13 +9,13 @@
 */
 import { useState, useMemo, useEffect } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
-import ChartCard from "@/components/ChartCard";
+import ChartCard, { ColorLabel } from "@/components/ChartCard";
 import StatCard from "@/components/StatCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import HeroBackdrop from "@/components/HeroBackdrop";
 import { formatCurrency, formatCurrencyExact, formatPercent, formatMonthYear, formatAxisDollars } from "@/lib/utils";
-import { CHART_HEX_COLORS } from "@/lib/types";
+import type { MonthlyData } from "@/lib/types";
 import { Calendar, TrendingUp, TrendingDown, BarChart3 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -26,7 +26,9 @@ import { useLocation } from "wouter";
 
 
 export default function Monthly() {
-  const { loading, monthlyData, avgMonthlySpend, groupColors, nameOf, analysisTransactions } = useExpenses();
+  const {
+    loading, monthlyData, avgMonthlySpend, groupColors, nameOf, colorOf, analysisTransactions,
+  } = useExpenses();
   const [selectedMonth, setSelectedMonth] = useState<string>("");
   const [location, navigate] = useLocation();
 
@@ -119,6 +121,7 @@ export default function Monthly() {
     return Array.from({ length: isCurrent ? today.getDate() : daysInMonth }, (_, i) => ({
       day: i + 1,
       total: Math.round(dailyMap.get(i + 1) || 0),
+      exact: dailyMap.get(i + 1) || 0,
     }));
   }, [monthTransactions, activeMonth]);
 
@@ -279,7 +282,31 @@ export default function Monthly() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.2 }}
         >
-          <ChartCard title="Monthly Composition by Group" subtitle="Click a month to select it">
+          <ChartCard
+            title="Monthly Composition by Group"
+            subtitle="Click a month to select it"
+            viewKey="monthly-composition"
+            table={{
+              columns: [
+                { label: "Month", cell: (m: MonthlyData) => `${m.label}${m.partial ? " (so far)" : ""}` },
+                { label: "Spend", align: "right", cell: (m: MonthlyData) => formatCurrencyExact(m.total) },
+                {
+                  label: "Largest group",
+                  cell: (m: MonthlyData) => {
+                    const top = Object.entries(m.groups).sort((a, b) => b[1] - a[1])[0];
+                    return top ? (
+                      <ColorLabel color={groupColors[top[0]]}>
+                        {top[0]} <span className="text-muted-foreground tabular-nums">{formatCurrency(top[1])}</span>
+                      </ColorLabel>
+                    ) : "—";
+                  },
+                },
+              ],
+              rows: [...monthlyData].reverse(),
+              rowKey: (m: MonthlyData) => m.month,
+              onRowClick: (m: MonthlyData) => setSelectedMonth(m.month),
+            }}
+          >
             <div className="h-[320px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={stackedMonthlyData} barCategoryGap="15%" onClick={handleCompositionClick} className="cursor-pointer">
@@ -318,6 +345,21 @@ export default function Monthly() {
           transition={{ duration: 0.5, delay: 0.3 }}
         >
           <ChartCard
+            viewKey="monthly-daily"
+            table={{
+              columns: [
+                {
+                  label: "Day",
+                  cell: (d: { day: number }) => {
+                    const [y, mo] = activeMonth.split("-").map(Number);
+                    return new Date(y, mo - 1, d.day).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" });
+                  },
+                },
+                { label: "Spend", align: "right", cell: (d: { exact: number }) => (d.exact ? formatCurrencyExact(d.exact) : "—") },
+              ],
+              rows: dailySpending,
+              rowKey: (d: { day: number }) => String(d.day),
+            }}
             title={`Daily Spending — ${formatMonthYear(activeMonth)}`}
             subtitle={partial ? `Day-by-day breakdown, up to today` : "Day-by-day breakdown"}
           >
@@ -378,7 +420,7 @@ export default function Monthly() {
                 </tr>
               </thead>
               <tbody>
-                {categoryBreakdown.map((c, i) => (
+                {categoryBreakdown.map((c) => (
                   <tr
                     key={c.id}
                     className="border-b border-border/50 hover:bg-accent/50 transition-colors cursor-pointer group"
@@ -388,7 +430,7 @@ export default function Monthly() {
                       <div className="flex items-center gap-2">
                         <div
                           className="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={{ backgroundColor: CHART_HEX_COLORS[i % CHART_HEX_COLORS.length] }}
+                          style={{ backgroundColor: colorOf(c.id) }}
                         />
                         <span className="group-hover:text-primary transition-colors">{c.name}</span>
                         <span className="text-primary/0 group-hover:text-primary/60 transition-colors text-[10px]">→</span>
@@ -409,7 +451,7 @@ export default function Monthly() {
                           className="h-2 rounded-full transition-all duration-500"
                           style={{
                             width: `${Math.min(c.pct * 2, 100)}%`,
-                            backgroundColor: CHART_HEX_COLORS[i % CHART_HEX_COLORS.length],
+                            backgroundColor: colorOf(c.id),
                           }}
                         />
                       </div>

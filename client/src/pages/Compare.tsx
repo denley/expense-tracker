@@ -537,6 +537,24 @@ export default function Compare() {
           transition={{ duration: 0.5, delay: 0.2 }}
         >
           <ChartCard
+            viewKey="compare-months"
+            table={{
+              columns: [
+                { label: "Month", cell: (r: (typeof monthlyRows)[number]) => r.name },
+                { label: periodA.label, align: "right", cell: (r: (typeof monthlyRows)[number]) => (r.a !== undefined ? formatCurrency(r.a) : "—") },
+                { label: `${periodB.label} (baseline)`, align: "right", cell: (r: (typeof monthlyRows)[number]) => (r.b !== undefined ? formatCurrency(r.b) : "—") },
+                {
+                  label: "Change",
+                  align: "right",
+                  cell: (r: (typeof monthlyRows)[number]) =>
+                    r.a !== undefined && r.b !== undefined ? (
+                      <span className={deltaColor(r.a - r.b)}>{signedCurrency(r.a - r.b)}</span>
+                    ) : "—",
+                },
+              ],
+              rows: monthlyRows,
+              rowKey: (r: (typeof monthlyRows)[number]) => r.name,
+            }}
             title="Month by Month"
             subtitle={
               bothCalendarYears

@@ -8,6 +8,17 @@ hostnames, logins and anything about the deployment out of it.
 To work on the household's actual data (import, categorise), use the running server's API, described in
 the data folder's `README.md` (`server/readme.ts`), not this repo.
 
+## Product scope
+
+An expense tracker, not a budgeting tool: it records where money went and helps understand it.
+- No income or transfer tracking, and no budgets or targets for categories. (A legacy `Budget` column
+  in `categories.csv` is read and written but deliberately not shown.) Refunds simply net against spending.
+- One-offs are ordinary categories with a flag (◈) so they can be hidden from trends; don't grow them
+  into a separate "projects" concept.
+- Prefer small refinements of the existing pages over new pages and concepts.
+- Colour follows the category, never its rank: use `colorOf(id)` / `groupColors` for anything that
+  stands for a category.
+
 ## Layout
 
 - `client/src/lib/` — shared with the server, so no DOM or Node APIs here (except `api.ts`, `sync.ts`,

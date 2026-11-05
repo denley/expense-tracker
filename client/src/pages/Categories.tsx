@@ -11,15 +11,15 @@
 */
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
-import ChartCard from "@/components/ChartCard";
+import ChartCard, { ColorLabel } from "@/components/ChartCard";
 import StatCard from "@/components/StatCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import HeroBackdrop from "@/components/HeroBackdrop";
 import TransactionEditDialog from "@/components/TransactionEditDialog";
 import { CategoryPicker, CategoryTreeDropdown } from "@/components/pickers";
-import { formatCurrency, formatCurrencyExact, formatPercent, formatDate } from "@/lib/utils";
-import { CHART_HEX_COLORS, type Transaction, type CategoryNode } from "@/lib/types";
+import { formatCurrency, formatCurrencyExact, formatPercent, formatDate, formatMonthYear } from "@/lib/utils";
+import type { Transaction, CategoryNode } from "@/lib/types";
 import { Tags, Hash, TrendingUp, ArrowUpDown, Search, Settings2, PencilLine, ExternalLink, ChevronRight } from "lucide-react";
 import ManageCategoriesDialog from "@/components/ManageCategoriesDialog";
 import { toastWithUndo } from "@/components/undoToast";
@@ -171,30 +171,38 @@ export default function Categories() {
     }
     return Array.from(map.values())
       .sort((a, b) => a.key.localeCompare(b.key))
-      .map((m) => ({ name: m.label, total: Math.round(m.total) }));
+      .map((m) => ({ key: m.key, name: m.label, total: Math.round(m.total), exact: m.total }));
   }, [selectionTransactions]);
 
   // Top merchants for the selection ("full" keeps the untruncated key for search links)
   const topMerchants = useMemo(() => {
-    const map = new Map<string, { total: number; count: number }>();
+    const map = new Map<string, { total: number; count: number; byCategory: Map<string, number> }>();
     for (const t of selectionTransactions) {
       const key = t.description;
       if (!map.has(key)) {
-        map.set(key, { total: 0, count: 0 });
+        map.set(key, { total: 0, count: 0, byCategory: new Map() });
       }
       const m = map.get(key)!;
       m.total += t.amount;
       m.count += 1;
+      m.byCategory.set(t.categoryId, (m.byCategory.get(t.categoryId) ?? 0) + t.amount);
     }
     return Array.from(map.entries())
-      .map(([full, data]) => ({
-        name: full.length > 40 ? full.substring(0, 40) + "..." : full,
-        full,
-        ...data,
-      }))
+      .map(([full, data]) => {
+        // Coloured like the category the merchant is mostly filed under
+        const mainCategory = [...data.byCategory.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        return {
+          name: full.length > 40 ? full.substring(0, 40) + "..." : full,
+          full,
+          total: data.total,
+          count: data.count,
+          mainCategory,
+          color: colorOf(mainCategory),
+        };
+      })
       .sort((a, b) => b.total - a.total)
       .slice(0, 8);
-  }, [selectionTransactions]);
+  }, [selectionTransactions, colorOf]);
 
   // Click a merchant bar → that merchant's transactions, ready to verify or fix
   const handleMerchantClick = useCallback(
@@ -340,7 +348,19 @@ export default function Categories() {
           transition={{ duration: 0.5, delay: 0.2 }}
           className="lg:col-span-2"
         >
-          <ChartCard title={`${chartTitle} — Monthly Trend`} subtitle="Spend per month, subcategories included">
+          <ChartCard
+            title={`${chartTitle} — Monthly Trend`}
+            subtitle="Spend per month, subcategories included"
+            viewKey="categories-monthly"
+            table={{
+              columns: [
+                { label: "Month", cell: (m: (typeof monthlyTrend)[number]) => formatMonthYear(m.key) },
+                { label: "Spend", align: "right", cell: (m: (typeof monthlyTrend)[number]) => formatCurrencyExact(m.exact) },
+              ],
+              rows: [...monthlyTrend].reverse(),
+              rowKey: (m: (typeof monthlyTrend)[number]) => m.key,
+            }}
+          >
             <div className="h-[280px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={monthlyTrend} barCategoryGap="20%">
@@ -375,7 +395,21 @@ export default function Categories() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
         >
-          <ChartCard title="Top Merchants" subtitle="Click a bar to review those transactions">
+          <ChartCard
+            title="Top Merchants"
+            subtitle="Click a bar to review those transactions"
+            viewKey="categories-merchants"
+            table={{
+              columns: [
+                { label: "Merchant", cell: (m: (typeof topMerchants)[number]) => <ColorLabel color={m.color}>{m.name}</ColorLabel> },
+                { label: "Txns", align: "right", cell: (m: (typeof topMerchants)[number]) => m.count },
+                { label: "Spend", align: "right", cell: (m: (typeof topMerchants)[number]) => formatCurrencyExact(m.total) },
+              ],
+              rows: topMerchants,
+              rowKey: (m: (typeof topMerchants)[number]) => m.full,
+              onRowClick: (m: (typeof topMerchants)[number]) => navigate(`/transactions?q=${encodeURIComponent(m.full)}`),
+            }}
+          >
             <div className="h-[280px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
@@ -403,8 +437,8 @@ export default function Categories() {
                   />
                   <Tooltip content={<CustomTooltip />} />
                   <Bar dataKey="total" name="Total" radius={[0, 4, 4, 0]}>
-                    {topMerchants.map((_, i) => (
-                      <Cell key={i} fill={CHART_HEX_COLORS[i % CHART_HEX_COLORS.length]} />
+                    {topMerchants.map((m) => (
+                      <Cell key={m.full} fill={m.color} />
                     ))}
                   </Bar>
                 </BarChart>

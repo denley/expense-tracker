@@ -41,7 +41,7 @@ export interface AccountCoverage {
   to: string;
   count: number;
 }
-import { MONTH_LABELS, groupColor } from "@/lib/types";
+import { MONTH_LABELS, UNCATEGORIZED_COLOR, groupColor } from "@/lib/types";
 import {
   buildTree,
   slugForName,
@@ -462,12 +462,19 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   const nameOf = useCallback((id: string) => tree.byId.get(id)?.name ?? id, [tree]);
   const pathOf = useCallback((id: string) => tree.pathOf(id), [tree]);
 
+  /**
+   * The one colour for a category everywhere in the app: its own colour, else
+   * its top-level group's, else a stable colour derived from the group name.
+   * Charts colour by this, never by rank, so a category keeps its colour
+   * from chart to chart.
+   */
   const colorOf = useCallback(
     (id: string) => {
       const node = tree.byId.get(id);
       if (node?.color) return node.color;
       const root = tree.rootOf(id);
       if (root?.color) return root.color;
+      if ((root?.id ?? id) === UNCATEGORIZED_ID) return UNCATEGORIZED_COLOR;
       return groupColor(root?.name ?? id);
     },
     [tree]
@@ -661,10 +668,10 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   const groupColors = useMemo(() => {
     const map: Record<string, string> = {};
     for (const n of tree.children.get(null) ?? []) {
-      map[n.name] = n.color ?? groupColor(n.name);
+      map[n.name] = colorOf(n.id);
     }
     return map;
-  }, [tree]);
+  }, [tree, colorOf]);
 
   const accounts = useMemo(() => {
     const set = new Set<string>();

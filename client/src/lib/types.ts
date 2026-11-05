@@ -181,6 +181,9 @@ const KNOWN_GROUP_COLORS: Record<string, string> = {
   "Income": "#6b8e9b",
 };
 
+/** Uncategorised is always a neutral grey, never a palette colour that could pass for a real group */
+export const UNCATEGORIZED_COLOR = "#a8a29e";
+
 /**
  * Stable fallback color for a top-level bucket name — known names keep their
  * palette, new ones hash into it. A node's explicit `color` wins over this.
