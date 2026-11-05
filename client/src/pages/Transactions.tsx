@@ -177,11 +177,6 @@ export default function Transactions() {
   }, [transactions, search, category, tree, account, dateFrom, dateTo, uncatOnly, dupOnly, duplicateIds, sortField, sortDir]);
 
   const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount]);
-  const dayTotals = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const t of filtered) totals.set(t.dateStr, (totals.get(t.dateStr) ?? 0) + t.amount);
-    return totals;
-  }, [filtered]);
   const filteredTotal = useMemo(() => filtered.reduce((s, t) => s + t.amount, 0), [filtered]);
   const uncatCount = useMemo(
     () => transactions.filter((t) => t.categoryId === UNCATEGORIZED_ID).length,
@@ -664,7 +659,6 @@ export default function Transactions() {
           <TransactionMobileList
             rows={visible}
             groupByDay={groupByDay}
-            dayTotals={dayTotals}
             selected={selected}
             duplicateIds={duplicateIds}
             onOpen={(t) => { setSheetTxn(t); setSheetOpen(true); }}
@@ -702,9 +696,8 @@ export default function Transactions() {
                 <Fragment key={t.id}>
                 {groupByDay && t.dateStr !== visible[i - 1]?.dateStr && (
                   <tr className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    <td colSpan={2} className={cn(dayHeaderCell, "text-right tabular-nums normal-case")}>
-                      {formatCurrency(dayTotals.get(t.dateStr) ?? 0)}
-                    </td>
+                    {/* The date lines up with the description column */}
+                    <td colSpan={2} className={dayHeaderCell} />
                     <td colSpan={4} className={dayHeaderCell}>{formatDayHeading(t.date)}</td>
                   </tr>
                 )}

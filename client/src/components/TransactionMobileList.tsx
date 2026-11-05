@@ -11,7 +11,7 @@ import { useExpenses } from "@/contexts/ExpenseContext";
 import type { Transaction } from "@/lib/types";
 import { UNCATEGORIZED_ID } from "@/lib/tree";
 import { CategoryPicker } from "@/components/pickers";
-import { formatCurrency, formatCurrencyExact, formatDate, formatDayHeading, cn } from "@/lib/utils";
+import { formatCurrencyExact, formatDate, formatDayHeading, cn } from "@/lib/utils";
 import { Check, Copy } from "lucide-react";
 
 const LONG_PRESS_MS = 450;
@@ -21,8 +21,6 @@ interface Props {
   rows: Transaction[];
   /** Sticky day headers (only meaningful when sorted by date) */
   groupByDay: boolean;
-  /** Total per ISO date over the whole filtered list, not just the rows shown */
-  dayTotals: Map<string, number>;
   selected: Set<string>;
   duplicateIds: Set<string>;
   onOpen: (t: Transaction) => void;
@@ -31,7 +29,7 @@ interface Props {
 }
 
 export default function TransactionMobileList({
-  rows, groupByDay, dayTotals, selected, duplicateIds, onOpen, onToggleSelect, onCategory,
+  rows, groupByDay, selected, duplicateIds, onOpen, onToggleSelect, onCategory,
 }: Props) {
   const selecting = selected.size > 0;
   return (
@@ -39,7 +37,7 @@ export default function TransactionMobileList({
       {rows.map((t, i) => (
         <div key={t.id}>
           {groupByDay && t.dateStr !== rows[i - 1]?.dateStr && (
-            <DayHeader date={t.date} total={dayTotals.get(t.dateStr) ?? 0} />
+            <DayHeader date={t.date} />
           )}
           <Row
             t={t}
@@ -57,11 +55,10 @@ export default function TransactionMobileList({
   );
 }
 
-function DayHeader({ date, total }: { date: Date; total: number }) {
+function DayHeader({ date }: { date: Date }) {
   return (
-    <div className="sticky top-[var(--mobile-topbar-h,0px)] z-10 flex items-center justify-between px-4 py-1.5 bg-secondary/95 backdrop-blur border-b border-border/50 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-      <span>{formatDayHeading(date)}</span>
-      <span className="tabular-nums normal-case">{formatCurrency(total)}</span>
+    <div className="sticky top-[var(--mobile-topbar-h,0px)] z-10 px-4 py-1.5 bg-secondary/95 backdrop-blur border-b border-border/50 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+      {formatDayHeading(date)}
     </div>
   );
 }
