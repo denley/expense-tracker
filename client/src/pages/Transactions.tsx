@@ -16,6 +16,7 @@ import SplitTransactionDialog from "@/components/SplitTransactionDialog";
 import RuleQuickDialog from "@/components/RuleQuickDialog";
 import RuleRunReviewDialog from "@/components/RuleRunReviewDialog";
 import ImportDialog from "@/components/ImportDialog";
+import FilterBreakdown from "@/components/FilterBreakdown";
 import TransactionMobileList from "@/components/TransactionMobileList";
 import TransactionSheet from "@/components/TransactionSheet";
 import { CategoryPicker, CategoryTreeDropdown } from "@/components/pickers";
@@ -605,6 +606,15 @@ export default function Transactions() {
           </div>
         )}
       </motion.div>
+
+      {/* Where the filtered money went (by sub-category, or by top-level category) */}
+      {hasFilters && (
+        <FilterBreakdown
+          rows={filtered}
+          category={category}
+          onPick={(id) => { setCategory(id); setVisibleCount(PAGE_SIZE); }}
+        />
+      )}
 
       {/* Suggested rules covering the uncategorised pile */}
       {ruleSuggestions.length > 0 && (
