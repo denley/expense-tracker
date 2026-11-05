@@ -2,7 +2,7 @@ import { formatCurrencyExact } from "@/lib/utils";
 
 interface TooltipProps {
   active?: boolean;
-  payload?: Array<{ name: string; value: number; color: string; dataKey: string }>;
+  payload?: Array<{ name: string; value: number; color: string; dataKey: string; payload?: { partial?: boolean } }>;
   label?: string;
   formatter?: (value: number) => string;
 }
@@ -11,12 +11,14 @@ export default function CustomTooltip({ active, payload, label, formatter }: Too
   if (!active || !payload?.length) return null;
 
   const format = formatter || formatCurrencyExact;
+  // Chart rows for an unfinished month carry partial: true
+  const heading = label && payload[0]?.payload?.partial ? `${label} (so far)` : label;
 
   return (
     <div className="bg-card border border-border rounded-lg shadow-lg p-3 min-w-[160px]">
-      {label && (
+      {heading && (
         <p className="text-xs font-medium text-muted-foreground mb-2 pb-2 border-b border-border">
-          {label}
+          {heading}
         </p>
       )}
       <div className="space-y-1.5">

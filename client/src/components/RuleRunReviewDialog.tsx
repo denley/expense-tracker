@@ -38,7 +38,8 @@ export default function RuleRunReviewDialog({ open, onOpenChange, changes }: Pro
   }, [changes, nameOf]);
 
   const undo = () => {
-    revertCategories(changes.map((c) => ({ id: c.id, categoryId: c.fromCategoryId })));
+    // Only rows still filed where the run put them: never undo a later change
+    revertCategories(changes.map((c) => ({ id: c.id, categoryId: c.fromCategoryId, ifCategoryId: c.toCategoryId })));
     toast.success(`Reverted ${changes.length} transaction${changes.length === 1 ? "" : "s"}`);
     onOpenChange(false);
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { csvToRules, rulesToCsv, validateFile, emptyWorkspaceTexts, parseWorkspace, WS_FILES } from "./files";
+import { csvToRules, rulesToCsv, validateFile, emptyWorkspaceTexts, parseWorkspace, normalizeLoaded, WS_FILES } from "./files";
 
 describe("rules.csv ids", () => {
   const text =
@@ -47,5 +47,19 @@ describe("parseWorkspace", () => {
   it("flags an unreadable transactions.csv instead of reading it as empty", () => {
     const ws = parseWorkspace({ ...emptyWorkspaceTexts(), [WS_FILES.transactions]: "garbage" });
     expect(ws.transactionsUnreadable).toBe(true);
+  });
+});
+
+describe("normalizeLoaded", () => {
+  it("renames the root's old default name to Australian spelling", () => {
+    const norm = normalizeLoaded([], [{ id: "uncategorized", parentId: null, name: "Uncategorized" }]);
+    expect(norm.nodesChanged).toBe(true);
+    expect(norm.nodes).toEqual([{ id: "uncategorized", parentId: null, name: "Uncategorised" }]);
+  });
+
+  it("keeps a name someone chose for the root", () => {
+    const norm = normalizeLoaded([], [{ id: "uncategorized", parentId: null, name: "To sort" }]);
+    expect(norm.nodesChanged).toBe(false);
+    expect(norm.nodes[0].name).toBe("To sort");
   });
 });

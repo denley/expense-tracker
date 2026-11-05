@@ -199,7 +199,8 @@ export default function Rules() {
           <h2 className="text-2xl font-bold tracking-tight text-foreground">Rules</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
             "Description contains X → assign category." Rules run automatically during CSV
-            import and on demand here. When several rules match, the first one in rules.csv wins.
+            import and on demand here. When several rules match, the older rule wins unless you
+            reorder them under Overlaps.
           </p>
         </div>
         {rules.length > 0 && (

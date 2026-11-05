@@ -69,7 +69,7 @@ descendants up into ancestors.
   and suggestions, its rules disabled, history kept. **Don't categorise new
   spending into an archived subtree.**
 - \`Color\`, \`Budget\`, \`Notes\`, \`CreatedAt\` — optional metadata.
-The top-level node \`uncategorized\` ("Uncategorized") is special: rows needing
+The top-level node \`uncategorized\` ("Uncategorised") is special: rows needing
 triage are filed there, and the server re-creates it if it's missing.
 
 ### transactions.csv — every transaction

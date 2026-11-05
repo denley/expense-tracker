@@ -41,6 +41,7 @@ import { useIsMobile } from "@/hooks/useMobile";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
+import { toastWithUndo } from "@/components/undoToast";
 import { cn } from "@/lib/utils";
 
 type SortField = "date" | "amount" | "description" | "category";
@@ -61,7 +62,7 @@ const SORT_OPTIONS: Array<{ value: `${SortField}-${"asc" | "desc"}`; label: stri
 export default function Transactions() {
   const {
     transactions, allTransactions, loading, accounts, accountCoverage, groupColors, tree, nameOf,
-    updateTransactions, deleteTransactions, runRules, rules,
+    categorizeTransactions, deleteTransactions, restoreTransactions, runRules, rules,
   } = useExpenses();
   const [location] = useLocation();
   const isMobile = useIsMobile();
@@ -258,15 +259,22 @@ export default function Transactions() {
       toast.error("Choose a category to apply");
       return;
     }
-    updateTransactions(selectedIds, { categoryId: bulkCategory });
-    toast.success(`Categorised ${selectedIds.length} transaction${selectedIds.length === 1 ? "" : "s"} as ${nameOf(bulkCategory)}`);
+    const undo = categorizeTransactions(selectedIds, bulkCategory);
+    toastWithUndo(
+      `Categorised ${selectedIds.length} transaction${selectedIds.length === 1 ? "" : "s"} as ${nameOf(bulkCategory)}`,
+      undo
+    );
     setBulkCategory("");
     clearSelection();
   };
 
   const doDelete = () => {
-    deleteTransactions(selectedIds);
-    toast.success(`Deleted ${selectedIds.length} transaction${selectedIds.length === 1 ? "" : "s"}`);
+    const removed = deleteTransactions(selectedIds);
+    toastWithUndo(
+      `Deleted ${removed.length} transaction${removed.length === 1 ? "" : "s"}`,
+      () => restoreTransactions(removed),
+      `Restored ${removed.length} transaction${removed.length === 1 ? "" : "s"}`
+    );
     setConfirmDelete(false);
     clearSelection();
   };
@@ -324,9 +332,11 @@ export default function Transactions() {
   if (loading) return <LoadingState />;
 
   // Opaque: sticky table cells stay stuck for the rest of the table, so each day's
-  // header covers the previous ones rather than pushing them off
+  // header covers the previous ones rather than pushing them off. Only from xl:
+  // below that the table sits in a horizontal scroll container, which would
+  // become the sticky reference and leave the header covering the day's first row.
   const dayHeaderCell =
-    "sticky top-[var(--mobile-topbar-h,0px)] z-10 px-3 py-1.5 bg-secondary border-b border-border/50";
+    "xl:sticky xl:top-0 z-10 px-3 py-1.5 bg-secondary border-b border-border/50";
   const selectCls = "bg-background border border-border rounded-lg px-2.5 py-2 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30";
 
   return (
@@ -660,8 +670,7 @@ export default function Transactions() {
             onOpen={(t) => { setSheetTxn(t); setSheetOpen(true); }}
             onToggleSelect={(t) => toggleOne(t.id)}
             onCategory={(t, id) => {
-              updateTransactions([t.id], { categoryId: id });
-              toast.success(`Categorised as ${nameOf(id)}`);
+              toastWithUndo(`Categorised as ${nameOf(id)}`, categorizeTransactions([t.id], id));
             }}
           />
         ) : (
@@ -751,7 +760,8 @@ export default function Transactions() {
                       <CategoryPicker
                         value={t.categoryId}
                         onChange={(id) => {
-                          if (id !== t.categoryId) updateTransactions([t.id], { categoryId: id });
+                          if (id === t.categoryId) return;
+                          toastWithUndo(`${t.description} → ${nameOf(id)}`, categorizeTransactions([t.id], id));
                         }}
                         className={cn(
                           "w-auto max-w-[220px] py-1 px-1.5 text-xs border-transparent bg-transparent hover:border-border hover:bg-background cursor-pointer",
@@ -906,7 +916,8 @@ export default function Transactions() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {selected.size} transaction{selected.size === 1 ? "" : "s"}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes them from your local data. Export a backup first if you're unsure.
+              They're removed for everyone. You can undo straight afterwards, and the Data page keeps
+              snapshots to restore from.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

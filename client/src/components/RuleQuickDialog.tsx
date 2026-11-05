@@ -19,6 +19,7 @@ import type { Rule } from "@/lib/types";
 import { formatCurrencyExact, formatDate } from "@/lib/utils";
 import { Wand2, Pencil, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { toastWithUndo } from "@/components/undoToast";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -33,7 +34,7 @@ interface Props {
 }
 
 export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedCategoryId, editRule }: Props) {
-  const { allTransactions, rules, addRule, updateRule, updateTransactions, nameOf } = useExpenses();
+  const { allTransactions, rules, addRule, updateRule, categorizeTransactions, nameOf } = useExpenses();
   const [pattern, setPattern] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [isRegex, setIsRegex] = useState(false);
@@ -114,9 +115,11 @@ export default function RuleQuickDialog({ open, onOpenChange, seedPattern, seedC
     }
     if (applyNow && applyCount > 0) {
       const ids = [...uncat, ...(reassignOthers ? others : [])].map((t) => t.id);
-      updateTransactions(ids, { categoryId });
-      toast.success(
-        `Rule saved — categorised ${ids.length} transaction${ids.length === 1 ? "" : "s"} as ${nameOf(categoryId)}`
+      const undo = categorizeTransactions(ids, categoryId);
+      toastWithUndo(
+        `Rule saved — categorised ${ids.length} transaction${ids.length === 1 ? "" : "s"} as ${nameOf(categoryId)}`,
+        undo,
+        "Categories put back (the rule is kept)"
       );
     } else {
       toast.success(`Rule saved: "${trimmed}" → ${nameOf(categoryId)}`);

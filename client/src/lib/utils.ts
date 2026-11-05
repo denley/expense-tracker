@@ -27,6 +27,18 @@ export function formatCurrencyExact(amount: number): string {
   return amount < 0 ? `-${formatted}` : formatted;
 }
 
+/**
+ * Compact dollars for chart axes: "$900", "$4.5k", "$14k", "-$1.2k". Keeps one
+ * decimal when it matters, so a 4,500 tick never reads as "$5k".
+ */
+export function formatAxisDollars(value: number): string {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  if (abs < 1000) return `${sign}$${Math.round(abs)}`;
+  const k = Math.round(abs / 100) / 10;
+  return `${sign}$${Number.isInteger(k) ? k : k.toFixed(1)}k`;
+}
+
 export function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`;
 }

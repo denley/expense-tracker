@@ -15,7 +15,7 @@ import {
 } from "@/lib/csv";
 import { applyRules } from "@/lib/rules";
 import { uid } from "@/lib/id";
-import { formatCurrency, formatIsoDate } from "@/lib/utils";
+import { formatCurrencyExact, formatIsoDate } from "@/lib/utils";
 import { inputCls, CategoryPicker } from "@/components/pickers";
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
@@ -492,7 +492,7 @@ export default function ImportDialog({ file, onClose, onImported }: Props) {
               </div>
               <div className="bg-card rounded-xl border border-border p-4">
                 <p className="text-xs text-muted-foreground uppercase tracking-wider">Import total</p>
-                <p className="text-xl font-semibold text-foreground mt-1 tabular-nums">{formatCurrency(importTotal)}</p>
+                <p className="text-xl font-semibold text-foreground mt-1 tabular-nums">{formatCurrencyExact(importTotal)}</p>
               </div>
             </div>
 
@@ -595,7 +595,7 @@ export default function ImportDialog({ file, onClose, onImported }: Props) {
                             {dup && (
                               <div className="text-[10px] text-sandstone truncate">
                                 {existing
-                                  ? `matches existing: ${existing.date} · ${formatCurrency(existing.amount)} · ${nameOf(existing.categoryId)}${existing.account ? ` · ${existing.account}` : ""}`
+                                  ? `matches existing: ${existing.date} · ${formatCurrencyExact(existing.amount)} · ${nameOf(existing.categoryId)}${existing.account ? ` · ${existing.account}` : ""}`
                                   : "appears twice in this file"}
                               </div>
                             )}
@@ -618,7 +618,7 @@ export default function ImportDialog({ file, onClose, onImported }: Props) {
                             )}
                           </td>
                           <td className={cn("px-3 py-1.5 text-right whitespace-nowrap tabular-nums font-medium align-top", t.amount < 0 && "text-eucalyptus")}>
-                            {formatCurrency(t.amount)}
+                            {formatCurrencyExact(t.amount)}
                             {t.originalAmount !== undefined && (
                               <div className="text-[10px] font-normal text-muted-foreground">
                                 {t.originalAmount.toFixed(2)} × {t.fxRate}

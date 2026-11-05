@@ -13,7 +13,9 @@
 */
 import Papa from "papaparse";
 import type { StoredTransaction, CategoryNode, Rule, ImportProfile } from "./types";
-import { buildTree, makeUncategorizedNode, UNCATEGORIZED_ID } from "./tree";
+import {
+  buildTree, makeUncategorizedNode, UNCATEGORIZED_ID, UNCATEGORIZED_NAME, LEGACY_UNCATEGORIZED_NAME,
+} from "./tree";
 import { csvToTransactions, transactionsToCsv } from "./export";
 
 export const WS_FILES = {
@@ -200,17 +202,23 @@ export function emptyWorkspaceTexts(): Record<WsFileName, string> {
 }
 
 /**
- * Ensure loaded data is coherent: the Uncategorized root exists and every
+ * Ensure loaded data is coherent: the Uncategorised root exists and every
  * transaction's categoryId points at a real node. Unknown ids (e.g. an agent
  * referenced a node it forgot to add) are auto-registered as root nodes named
  * after the id so no data is lost — visible and fixable in the app.
+ * Also migrates the root's old default name "Uncategorized" to "Uncategorised"
+ * (a name someone chose themselves is left alone).
  */
 export function normalizeLoaded(
   txns: StoredTransaction[],
   nodes: CategoryNode[]
 ): { txns: StoredTransaction[]; nodes: CategoryNode[]; txnsChanged: boolean; nodesChanged: boolean } {
-  const nextNodes = [...nodes];
   let nodesChanged = false;
+  const nextNodes = nodes.map((n) => {
+    if (n.id !== UNCATEGORIZED_ID || n.name !== LEGACY_UNCATEGORIZED_NAME) return n;
+    nodesChanged = true;
+    return { ...n, name: UNCATEGORIZED_NAME };
+  });
   if (!nextNodes.some((n) => n.id === UNCATEGORIZED_ID)) {
     nextNodes.push(makeUncategorizedNode());
     nodesChanged = true;

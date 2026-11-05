@@ -18,7 +18,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useExpenses } from "@/contexts/ExpenseContext";
 import type { CategoryNode } from "@/lib/types";
-import { PATH_SEP, searchCategories, validateName } from "@/lib/tree";
+import { PATH_SEP, UNCATEGORIZED_ID, searchCategories, validateName } from "@/lib/tree";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -230,14 +230,19 @@ function CategoryMenu({
   const selectedIndex = q
     ? 0
     : rows.findIndex((r) => (r.kind === "node" ? r.node.id === value : r.kind === "empty" && value === ""));
-  const activeIndex = Math.min(active >= 0 ? active : Math.max(0, selectedIndex), rows.length - 1);
+  // Filing an uncategorised row is the picker's main job: open on "Frequently
+  // used" rather than centring Uncategorized in the middle of the tree
+  const firstFrequent = rows.findIndex((r) => r.kind === "node" && r.frequent);
+  const startOnFrequent = !q && firstFrequent >= 0 && (value === "" || value === UNCATEGORIZED_ID);
+  const homeIndex = startOnFrequent ? firstFrequent : Math.max(0, selectedIndex);
+  const activeIndex = Math.min(active >= 0 ? active : homeIndex, rows.length - 1);
 
   // A new search starts at the top; no search centres the current value
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
     const row = list.querySelector<HTMLElement>(`[data-index="${Math.max(0, selectedIndex)}"]`);
-    if (q || !row) list.scrollTop = 0;
+    if (q || !row || startOnFrequent) list.scrollTop = 0;
     else scrollToRow(list, row, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the search changes
   }, [q]);

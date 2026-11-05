@@ -33,7 +33,7 @@ interface Props {
 
 export default function ManageCategoriesDialog({ open, onOpenChange }: Props) {
   const {
-    allTransactions, tree,
+    allTransactions, tree, colorOf,
     addNode, renameNode, moveNode, setNodeMeta, setNodeArchived, deleteNode,
   } = useExpenses();
 
@@ -286,7 +286,8 @@ export default function ManageCategoriesDialog({ open, onOpenChange }: Props) {
                           {(depth === 0 || n.oneOff || n.color) && (
                             <input
                               type="color"
-                              value={n.color ?? "#c9a96e"}
+                              // The colour the charts actually use (own, else inherited/derived)
+                              value={colorOf(n.id)}
                               onChange={(e) => setNodeMeta(n.id, { color: e.target.value })}
                               className="w-4 h-4 shrink-0 cursor-pointer rounded border-0 bg-transparent p-0"
                               title="Chart color"
@@ -426,7 +427,7 @@ export default function ManageCategoriesDialog({ open, onOpenChange }: Props) {
                   will move to{" "}
                   {deleteTarget.parentId && tree.byId.has(deleteTarget.parentId)
                     ? `"${tree.byId.get(deleteTarget.parentId)!.name}"`
-                    : "Uncategorized"}
+                    : "Uncategorised"}
                   , and any subcategories move up a level. Nothing is lost.
                 </>
               )}

@@ -50,7 +50,8 @@ export default function RuleOverlapsDialog({ open, onOpenChange, pairs, agreeing
             <Layers className="w-4 h-4 text-primary" /> Overlapping rules
           </DialogTitle>
           <DialogDescription>
-            When a transaction matches several rules, the first one in rules.csv wins.
+            When a transaction matches several rules, the one that comes first in the rule
+            order wins (older rules first, unless you've reordered them).
             Listed below are rule pairs that match the same transactions but disagree
             about the category — reorder them if the wrong one is winning.
           </DialogDescription>

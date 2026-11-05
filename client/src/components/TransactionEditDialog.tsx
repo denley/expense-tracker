@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { CategoryPicker, inputCls } from "@/components/pickers";
 import { toast } from "sonner";
+import { toastWithUndo } from "@/components/undoToast";
 
 interface Props {
   open: boolean;
@@ -26,7 +27,7 @@ interface Props {
 }
 
 export default function TransactionEditDialog({ open, onOpenChange, transaction }: Props) {
-  const { updateTransactions, addTransactions, deleteTransactions, pathOf } = useExpenses();
+  const { updateTransactions, addTransactions, deleteTransactions, restoreTransactions, pathOf } = useExpenses();
 
   const [date, setDate] = useState("");
   const [description, setDescription] = useState("");
@@ -89,8 +90,8 @@ export default function TransactionEditDialog({ open, onOpenChange, transaction 
 
   const remove = () => {
     if (!transaction) return;
-    deleteTransactions([transaction.id]);
-    toast.success("Transaction deleted");
+    const removed = deleteTransactions([transaction.id]);
+    toastWithUndo("Transaction deleted", () => restoreTransactions(removed), "Transaction restored");
     onOpenChange(false);
   };
 
@@ -101,7 +102,7 @@ export default function TransactionEditDialog({ open, onOpenChange, transaction 
           <DialogTitle>{transaction ? "Edit Transaction" : "Add Transaction"}</DialogTitle>
           <DialogDescription>
             {transaction
-              ? "Change any field — edits are saved locally."
+              ? "Change any field. Saving updates it for everyone."
               : "Manually record a transaction."}
           </DialogDescription>
         </DialogHeader>

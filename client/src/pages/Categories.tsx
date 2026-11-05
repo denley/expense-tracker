@@ -22,7 +22,7 @@ import { formatCurrency, formatCurrencyExact, formatPercent, formatDate } from "
 import { CHART_HEX_COLORS, type Transaction, type CategoryNode } from "@/lib/types";
 import { Tags, Hash, TrendingUp, ArrowUpDown, Search, Settings2, PencilLine, ExternalLink, ChevronRight } from "lucide-react";
 import ManageCategoriesDialog from "@/components/ManageCategoriesDialog";
-import { toast } from "sonner";
+import { toastWithUndo } from "@/components/undoToast";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Cell,
@@ -35,7 +35,7 @@ const PAGE_SIZE = 50;
 
 export default function Categories() {
   const {
-    transactions, loading, tree, nodeStats, colorOf, nameOf, updateTransactions,
+    transactions, loading, tree, nodeStats, colorOf, nameOf, categorizeTransactions,
     hideOneOffs, analysisTransactions, analysisNodeStats,
   } = useExpenses();
   /** Current node id, or "" for the top level ("all") */
@@ -576,8 +576,7 @@ export default function Categories() {
                         value={t.categoryId}
                         onChange={(categoryId) => {
                           if (categoryId === t.categoryId) return;
-                          updateTransactions([t.id], { categoryId });
-                          toast.success(`Moved to ${nameOf(categoryId)}`);
+                          toastWithUndo(`Moved to ${nameOf(categoryId)}`, categorizeTransactions([t.id], categoryId));
                         }}
                         className="!text-xs !py-1 !px-2 max-w-[180px]"
                       />

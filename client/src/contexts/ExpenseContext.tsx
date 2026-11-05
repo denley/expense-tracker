@@ -168,7 +168,15 @@ interface ExpenseContextType {
   // Transaction actions
   addTransactions: (txns: StoredTransaction[]) => void;
   updateTransactions: (ids: string[], changes: TransactionChanges) => void;
-  deleteTransactions: (ids: string[]) => void;
+  /**
+   * File transactions under one category. Returns an undo that puts back each
+   * row's previous category, skipping rows someone has changed since.
+   */
+  categorizeTransactions: (ids: string[], categoryId: string) => () => void;
+  /** Returns the removed rows (as they were), so the caller can offer Undo via restoreTransactions */
+  deleteTransactions: (ids: string[]) => StoredTransaction[];
+  /** Put deleted rows back unchanged (same ids; replay-safe) */
+  restoreTransactions: (rows: StoredTransaction[]) => void;
   /**
    * Replace one transaction with 2+ parts that must sum to its amount.
    * Parts keep the parent's date, description and account; each part gets
@@ -178,8 +186,12 @@ interface ExpenseContextType {
     id: string,
     parts: Array<{ amount: number; categoryId: string; notes: string }>
   ) => void;
-  /** Set each transaction's category individually (used to undo a rule run) */
-  revertCategories: (items: Array<{ id: string; categoryId: string }>) => void;
+  /**
+   * Set each transaction's category individually (used by undo). With
+   * ifCategoryId, a row is only reverted while it still has that category,
+   * so an undo never overwrites a later change.
+   */
+  revertCategories: (items: Array<{ id: string; categoryId: string; ifCategoryId?: string }>) => void;
 
   // Category tree management
   /** Returns the new node, or null (with a toast) if the name clashes among siblings */
@@ -536,28 +548,49 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     [analysisTransactions]
   );
 
+  /**
+   * One entry per calendar month from the first to the last month with data,
+   * months without transactions included as zeros, so bars are spaced in time
+   * and "previous month" really is the previous month.
+   */
   const monthlyData = useMemo(() => {
+    const keyOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const now = keyOf(new Date());
+    const make = (key: string): MonthlyData => {
+      const [y, mo] = key.split("-").map(Number);
+      const base = MONTH_LABELS[mo - 1];
+      return {
+        month: key,
+        label: multiYear ? `${base} ${String(y).slice(2)}` : base,
+        total: 0,
+        count: 0,
+        categories: {},
+        groups: {},
+        partial: key >= now,
+      };
+    };
     const map = new Map<string, MonthlyData>();
     for (const t of analysisTransactions) {
-      const key = `${t.date.getFullYear()}-${String(t.date.getMonth() + 1).padStart(2, "0")}`;
-      if (!map.has(key)) {
-        const base = MONTH_LABELS[t.date.getMonth()];
-        map.set(key, {
-          month: key,
-          label: multiYear ? `${base} ${String(t.date.getFullYear()).slice(2)}` : base,
-          total: 0,
-          count: 0,
-          categories: {},
-          groups: {},
-        });
-      }
-      const m = map.get(key)!;
+      const key = keyOf(t.date);
+      let m = map.get(key);
+      if (!m) map.set(key, (m = make(key)));
       m.total += t.amount;
       m.count += 1;
       m.categories[t.categoryId] = (m.categories[t.categoryId] || 0) + t.amount;
       m.groups[t.group] = (m.groups[t.group] || 0) + t.amount;
     }
-    return Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month));
+    const keys = Array.from(map.keys()).sort();
+    if (keys.length === 0) return [];
+    const out: MonthlyData[] = [];
+    let [y, mo] = keys[0].split("-").map(Number);
+    const last = keys[keys.length - 1];
+    for (;;) {
+      const key = `${y}-${String(mo).padStart(2, "0")}`;
+      if (key > last) break;
+      out.push(map.get(key) ?? make(key));
+      if (++mo > 12) { mo = 1; y++; }
+    }
+    return out;
   }, [analysisTransactions, multiYear]);
 
   /** Per-node rollup over a transaction list */
@@ -655,10 +688,17 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     return Array.from(map.values()).sort((a, b) => a.account.localeCompare(b.account));
   }, [stored]);
 
-  const avgMonthlySpend = useMemo(
-    () => (monthlyData.length > 0 ? totalSpend / monthlyData.length : 0),
-    [totalSpend, monthlyData]
-  );
+  /**
+   * Average over finished months with data: the current month's "so far" would
+   * drag it down, and a month without any transactions is missing data (not
+   * imported), not a month of zero spending
+   */
+  const avgMonthlySpend = useMemo(() => {
+    const withData = monthlyData.filter((m) => m.count > 0);
+    const full = withData.filter((m) => !m.partial);
+    const months = full.length > 0 ? full : withData;
+    return months.length > 0 ? months.reduce((s, m) => s + m.total, 0) / months.length : 0;
+  }, [monthlyData]);
 
   // ---------- Transaction actions ----------
   // Every mutation goes through an updater applied to the latest copy, so it
@@ -719,7 +759,17 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   const deleteTransactions = useCallback(
     (ids: string[]) => {
       const idSet = new Set(ids);
+      const removed = stored.filter((t) => idSet.has(t.id));
       mutateTxns((prev) => prev.filter((t) => !idSet.has(t.id)));
+      return removed;
+    },
+    [mutateTxns, stored]
+  );
+
+  const restoreTransactions = useCallback(
+    (rows: StoredTransaction[]) => {
+      const ids = new Set(rows.map((t) => t.id));
+      mutateTxns((prev) => [...prev.filter((t) => !ids.has(t.id)), ...rows]);
     },
     [mutateTxns]
   );
@@ -747,17 +797,30 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
   );
 
   const revertCategories = useCallback(
-    (items: Array<{ id: string; categoryId: string }>) => {
-      const byId = new Map(items.map((i) => [i.id, i.categoryId]));
+    (items: Array<{ id: string; categoryId: string; ifCategoryId?: string }>) => {
+      const byId = new Map(items.map((i) => [i.id, i]));
       mutateTxns((prev) =>
         prev.map((t) => {
-          const cat = byId.get(t.id);
-          if (cat === undefined || cat === t.categoryId) return t;
-          return { ...t, categoryId: cat };
+          const item = byId.get(t.id);
+          if (!item || item.categoryId === t.categoryId) return t;
+          if (item.ifCategoryId !== undefined && item.ifCategoryId !== t.categoryId) return t;
+          return { ...t, categoryId: item.categoryId };
         })
       );
     },
     [mutateTxns]
+  );
+
+  const categorizeTransactions = useCallback(
+    (ids: string[], categoryId: string) => {
+      const idSet = new Set(ids);
+      const before = stored
+        .filter((t) => idSet.has(t.id) && t.categoryId !== categoryId)
+        .map((t) => ({ id: t.id, categoryId: t.categoryId, ifCategoryId: categoryId }));
+      updateTransactions(ids, { categoryId });
+      return () => revertCategories(before);
+    },
+    [stored, updateTransactions, revertCategories]
   );
 
   // ---------- Category tree management ----------
@@ -1031,7 +1094,9 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     accountCoverage,
     addTransactions,
     updateTransactions,
+    categorizeTransactions,
     deleteTransactions,
+    restoreTransactions,
     splitTransaction,
     revertCategories,
     addNode,

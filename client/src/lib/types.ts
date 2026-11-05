@@ -113,6 +113,8 @@ export interface MonthlyData {
   categories: Record<string, number>;
   /** spend per top-level bucket name (full rollup) */
   groups: Record<string, number>;
+  /** The month isn't over yet (it's the current month): its total is "so far" */
+  partial: boolean;
 }
 
 /** Per-node aggregate over the scoped transactions */

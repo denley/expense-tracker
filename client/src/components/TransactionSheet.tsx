@@ -10,7 +10,7 @@ import { CategoryPicker } from "@/components/pickers";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { formatCurrencyExact, formatDate, cn } from "@/lib/utils";
 import { CheckSquare, PencilLine, Split, Wand2 } from "lucide-react";
-import { toast } from "sonner";
+import { toastWithUndo } from "@/components/undoToast";
 
 interface Props {
   transaction: Transaction | null;
@@ -27,7 +27,7 @@ interface Props {
 export default function TransactionSheet({
   transaction: t, open, onOpenChange, matchingRule, onRule, onSplit, onEdit, onSelect,
 }: Props) {
-  const { updateTransactions, nameOf } = useExpenses();
+  const { categorizeTransactions, nameOf } = useExpenses();
   if (!t) return null;
 
   // Close first so a follow-up dialog doesn't stack on the sheet
@@ -67,8 +67,7 @@ export default function TransactionSheet({
               value={t.categoryId}
               onChange={(id) => {
                 if (id === t.categoryId) return;
-                updateTransactions([t.id], { categoryId: id });
-                toast.success(`Categorised as ${nameOf(id)}`);
+                toastWithUndo(`Categorised as ${nameOf(id)}`, categorizeTransactions([t.id], id));
                 onOpenChange(false);
               }}
               className={cn(

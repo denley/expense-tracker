@@ -17,8 +17,8 @@ import ChartCard from "@/components/ChartCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import HeroBackdrop from "@/components/HeroBackdrop";
-import { formatCurrency, formatCurrencyExact, formatPercent } from "@/lib/utils";
-import { CHART_HEX_COLORS } from "@/lib/types";
+import { formatCurrency, formatCurrencyExact, formatPercent, formatAxisDollars } from "@/lib/utils";
+import { CHART_HEX_COLORS, type MonthlyData } from "@/lib/types";
 import { DollarSign, ShoppingCart, TrendingUp, Receipt, UploadCloud } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -53,15 +53,26 @@ export default function Dashboard() {
 
   const topCategory = useMemo(() => categoryTotals[0], [categoryTotals]);
 
-  const highestMonth = useMemo(
-    () => monthlyData.reduce((max, m) => (m.total > max.total ? m : max), monthlyData[0]),
+  // Highest/lowest among finished months with data: the current month's
+  // "so far" and gap months would always win "lowest"
+  const fullMonths = useMemo(
+    () => monthlyData.filter((m) => !m.partial && m.count > 0),
     [monthlyData]
+  );
+  const fullMonthCount = fullMonths.length;
+
+  const highestMonth = useMemo(
+    () => fullMonths.reduce<MonthlyData | undefined>((max, m) => (!max || m.total > max.total ? m : max), undefined),
+    [fullMonths]
   );
 
   const lowestMonth = useMemo(
-    () => monthlyData.reduce((min, m) => (m.total < min.total ? m : min), monthlyData[0]),
-    [monthlyData]
+    () => fullMonths.reduce<MonthlyData | undefined>((min, m) => (!min || m.total < min.total ? m : min), undefined),
+    [fullMonths]
   );
+  const partialMonth = monthlyData.length > 0 && monthlyData[monthlyData.length - 1].partial
+    ? monthlyData[monthlyData.length - 1]
+    : undefined;
 
   const dailyAvg = useMemo(() => {
     if (analysisTransactions.length === 0) return 0;
@@ -84,6 +95,7 @@ export default function Dashboard() {
       name: m.label,
       total: Math.round(m.total),
       monthKey: m.month,
+      partial: m.partial,
     })),
     [monthlyData]
   );
@@ -242,7 +254,11 @@ export default function Dashboard() {
         <StatCard
           label="Monthly Average"
           value={formatCurrency(avgMonthlySpend)}
-          subtitle={`Daily avg: ${formatCurrency(dailyAvg)}`}
+          subtitle={
+            partialMonth && fullMonthCount > 0
+              ? `Over ${fullMonthCount} full month${fullMonthCount === 1 ? "" : "s"} · daily avg ${formatCurrency(dailyAvg)}`
+              : `Daily avg: ${formatCurrency(dailyAvg)}`
+          }
           icon={<TrendingUp className="w-4 h-4" />}
         />
         <StatCard
@@ -274,12 +290,18 @@ export default function Dashboard() {
         >
           <ChartCard
             title="Monthly Spending"
-            subtitle={`Highest: ${highestMonth?.label} (${formatCurrency(highestMonth?.total || 0)}) · Lowest: ${lowestMonth?.label} (${formatCurrency(lowestMonth?.total || 0)}) · Click a bar to drill down`}
+            subtitle={[
+              highestMonth && `Highest: ${highestMonth.label} (${formatCurrency(highestMonth.total)})`,
+              lowestMonth && lowestMonth !== highestMonth && `Lowest: ${lowestMonth.label} (${formatCurrency(lowestMonth.total)})`,
+              partialMonth && `${partialMonth.label} so far (faded)`,
+              "Click a bar to drill down",
+            ].filter(Boolean).join(" · ")}
           >
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={monthlyChartData}
+                  margin={{ top: 16, right: 8 }}
                   barCategoryGap="20%"
                   onClick={handleMonthClick}
                   className="cursor-pointer"
@@ -295,7 +317,7 @@ export default function Dashboard() {
                     tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                    tickFormatter={formatAxisDollars}
                   />
                   <Tooltip content={<CustomTooltip />} />
                   <ReferenceLine
@@ -304,14 +326,18 @@ export default function Dashboard() {
                     strokeDasharray="6 4"
                     strokeWidth={2}
                     label={{
-                      value: `Avg: $${(avgMonthlySpend / 1000).toFixed(1)}k`,
-                      position: "right",
+                      value: `Avg ${formatAxisDollars(avgMonthlySpend)}`,
+                      position: "insideTopRight",
                       fontSize: 11,
                       fill: "#c9a96e",
                       fontWeight: 600,
                     }}
                   />
-                  <Bar dataKey="total" name="Spend" fill="#55a38b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="total" name="Spend" fill="#55a38b" radius={[4, 4, 0, 0]}>
+                    {monthlyChartData.map((m) => (
+                      <Cell key={m.monthKey} fill="#55a38b" fillOpacity={m.partial ? 0.4 : 1} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -385,7 +411,7 @@ export default function Dashboard() {
                     tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                    tickFormatter={formatAxisDollars}
                   />
                   <YAxis
                     type="category"
@@ -437,7 +463,7 @@ export default function Dashboard() {
                     tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                    tickFormatter={formatAxisDollars}
                   />
                   <Tooltip content={<CustomTooltip />} />
                   <Area

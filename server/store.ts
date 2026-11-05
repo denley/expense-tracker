@@ -284,7 +284,7 @@ export class Store {
   }
 
   /**
-   * Keep the files coherent: Uncategorized exists, every transaction points
+   * Keep the files coherent: Uncategorised exists, every transaction points
    * at a real node (unknown ids are registered as top-level nodes so nothing
    * is lost). Must run inside exclusive().
    */

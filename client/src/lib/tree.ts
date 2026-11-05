@@ -6,7 +6,7 @@
   Robustness rules for externally edited files:
   - a parentId pointing at a missing node → the node is treated as a root
   - a parentId cycle → every node in the cycle is treated as a root
-  - the "Uncategorized" root always exists (re-added if deleted)
+  - the Uncategorised root (id "uncategorized") always exists (re-added if deleted)
 */
 import type { CategoryNode } from "./types";
 
@@ -14,7 +14,9 @@ import type { CategoryNode } from "./types";
 export const PATH_SEP = " > ";
 
 export const UNCATEGORIZED_ID = "uncategorized";
-export const UNCATEGORIZED_NAME = "Uncategorized";
+export const UNCATEGORIZED_NAME = "Uncategorised";
+/** The root's default name before the app switched to Australian spelling */
+export const LEGACY_UNCATEGORIZED_NAME = "Uncategorized";
 
 export function makeUncategorizedNode(): CategoryNode {
   return { id: UNCATEGORIZED_ID, parentId: null, name: UNCATEGORIZED_NAME };

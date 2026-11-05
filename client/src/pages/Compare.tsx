@@ -1,7 +1,9 @@
 /*
   DESIGN: Scandinavian Analytical — Compare periods
   - Two periods (A vs baseline B) picked as a year, a month, or a custom range
-  - Presets: year vs previous (YoY), rolling 12 months, month vs previous/year-ago
+  - Presets: year to date vs the same dates last year, full years, last 12
+    full months, last full month vs previous/year-ago. The default is the first
+    like-for-like preset whose baseline the data fully covers.
   - KPI cards, aligned monthly bars, cumulative race, per-group delta table
     with category drill-down, and side-by-side calendar heatmaps
   - Ignores the global sidebar time scope (it compares across all data);
@@ -14,18 +16,19 @@ import StatCard from "@/components/StatCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import CalendarHeatmap, { type DayTotal } from "@/components/CalendarHeatmap";
-import { formatCurrency, formatCurrencyExact } from "@/lib/utils";
+import { formatCurrency, formatCurrencyExact, formatAxisDollars, formatIsoDate } from "@/lib/utils";
 import {
   type Period, yearPeriod, monthPeriod, rangePeriod, monthKeysIn, monthKeyLabel,
   daysInPeriod, isoOf, addDaysIso, shiftMonthKey, formatDay,
 } from "@/lib/compare";
 import { MONTH_LABELS } from "@/lib/types";
-import { ArrowLeftRight, ChevronRight, ArrowUpRight, X } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, ArrowUpRight } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, Legend,
 } from "recharts";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 
@@ -90,7 +93,6 @@ export default function Compare() {
 
   const latestMonth = availableMonths[0];
   const latestYear = availableYears[availableYears.length - 1];
-  const prevYear = availableYears[availableYears.length - 2];
 
   const defaultRange = useCallback((): { from: string; to: string } => {
     const to = isoOf(new Date());
@@ -108,65 +110,83 @@ export default function Compare() {
     [latestYear, latestMonth, defaultRange]
   );
 
-  // Default comparison once data arrives: year vs previous, else month vs previous
-  useEffect(() => {
-    if (pickA || baseTxns.length === 0) return;
-    if (availableYears.length >= 2) {
-      setPickA(makePicker({ mode: "year", year: latestYear }));
-      setPickB(makePicker({ mode: "year", year: prevYear }));
-      setActivePreset("yoy");
-    } else {
-      const m0 = latestMonth;
-      const m1 = availableMonths[1] ?? shiftMonthKey(m0, -1);
-      setPickA(makePicker({ mode: "month", month: m0 }));
-      setPickB(makePicker({ mode: "month", month: m1 }));
-      setActivePreset("mom");
-    }
-  }, [pickA, baseTxns.length, availableYears, availableMonths, latestYear, prevYear, latestMonth, makePicker]);
+  /** First day with data: a period starting earlier is only partly covered */
+  const dataStart = useMemo(
+    () => baseTxns.reduce((min, t) => (t.dateStr < min ? t.dateStr : min), "9999-12-31"),
+    [baseTxns]
+  );
 
+  // Presets compare like with like: finished months, or the same span of days
   const presets = useMemo(() => {
-    const list: Array<{ id: string; label: string; apply: () => void }> = [];
-    if (availableYears.length >= 2) {
+    const today = isoOf(new Date());
+    const curMonth = today.slice(0, 7);
+    const curYear = today.slice(0, 4);
+    const lastFullMonth = availableMonths.find((m) => m < curMonth) ?? shiftMonthKey(curMonth, -1);
+    const list: Array<{ id: string; label: string; a: PickerState; b: PickerState }> = [];
+    if (availableYears.includes(curYear) && availableYears.includes(String(Number(curYear) - 1))) {
+      const prev = String(Number(curYear) - 1);
       list.push({
-        id: "yoy",
-        label: `${latestYear} vs ${prevYear}`,
-        apply: () => {
-          setPickA(makePicker({ mode: "year", year: latestYear }));
-          setPickB(makePicker({ mode: "year", year: prevYear }));
-        },
+        id: "ytd",
+        label: `${curYear} to date vs same dates ${prev}`,
+        a: makePicker({ mode: "range", from: `${curYear}-01-01`, to: today }),
+        // (29 Feb has no counterpart in a non-leap year)
+        b: makePicker({ mode: "range", from: `${prev}-01-01`, to: `${prev}${today.slice(4) === "-02-29" ? "-02-28" : today.slice(4)}` }),
       });
+    }
+    if (availableYears.length >= 2) {
+      // The two most recent finished years
+      const full = availableYears.filter((y) => y < curYear);
+      if (full.length >= 2) {
+        const [y1, y0] = [full[full.length - 1], full[full.length - 2]];
+        list.push({
+          id: "yoy",
+          label: `${y1} vs ${y0}`,
+          a: makePicker({ mode: "year", year: y1 }),
+          b: makePicker({ mode: "year", year: y0 }),
+        });
+      }
       list.push({
         id: "rolling12",
-        label: "Last 12 months vs prior 12",
-        apply: () => {
-          const cur = isoOf(new Date()).slice(0, 7);
-          const a = { from: monthPeriod(shiftMonthKey(cur, -11)).from, to: monthPeriod(cur).to };
-          const b = { from: monthPeriod(shiftMonthKey(cur, -23)).from, to: monthPeriod(shiftMonthKey(cur, -12)).to };
-          setPickA(makePicker({ mode: "range", ...a }));
-          setPickB(makePicker({ mode: "range", ...b }));
-        },
+        label: "Last 12 full months vs prior 12",
+        a: makePicker({
+          mode: "range",
+          from: monthPeriod(shiftMonthKey(lastFullMonth, -11)).from,
+          to: monthPeriod(lastFullMonth).to,
+        }),
+        b: makePicker({
+          mode: "range",
+          from: monthPeriod(shiftMonthKey(lastFullMonth, -23)).from,
+          to: monthPeriod(shiftMonthKey(lastFullMonth, -12)).to,
+        }),
       });
     }
     if (latestMonth) {
       list.push({
         id: "mom",
-        label: "Month vs previous",
-        apply: () => {
-          setPickA(makePicker({ mode: "month", month: latestMonth }));
-          setPickB(makePicker({ mode: "month", month: shiftMonthKey(latestMonth, -1) }));
-        },
+        label: `${monthKeyLabel(lastFullMonth)} vs previous month`,
+        a: makePicker({ mode: "month", month: lastFullMonth }),
+        b: makePicker({ mode: "month", month: shiftMonthKey(lastFullMonth, -1) }),
       });
       list.push({
         id: "moy",
-        label: "Month vs a year ago",
-        apply: () => {
-          setPickA(makePicker({ mode: "month", month: latestMonth }));
-          setPickB(makePicker({ mode: "month", month: shiftMonthKey(latestMonth, -12) }));
-        },
+        label: `${monthKeyLabel(lastFullMonth)} vs a year earlier`,
+        a: makePicker({ mode: "month", month: lastFullMonth }),
+        b: makePicker({ mode: "month", month: shiftMonthKey(lastFullMonth, -12) }),
       });
     }
     return list;
-  }, [availableYears.length, latestYear, prevYear, latestMonth, makePicker]);
+  }, [availableYears, availableMonths, latestMonth, makePicker]);
+
+  // Default once data arrives: the first like-for-like comparison whose
+  // baseline the data fully covers (an uncovered baseline looks like low spend)
+  useEffect(() => {
+    if (pickA || baseTxns.length === 0 || presets.length === 0) return;
+    const covered = presets.filter((p) => p.id !== "yoy" && toPeriod(p.b).from >= dataStart);
+    const pick = covered[0] ?? presets.find((p) => p.id === "mom") ?? presets[0];
+    setPickA(pick.a);
+    setPickB(pick.b);
+    setActivePreset(pick.id);
+  }, [pickA, baseTxns.length, presets, dataStart]);
 
   const periodA = useMemo(() => (pickA ? toPeriod(pickA) : null), [pickA]);
   const periodB = useMemo(() => (pickB ? toPeriod(pickB) : null), [pickB]);
@@ -184,7 +204,7 @@ export default function Compare() {
   const totalA = useMemo(() => txnsA.reduce((s, t) => s + t.amount, 0), [txnsA]);
   const totalB = useMemo(() => txnsB.reduce((s, t) => s + t.amount, 0), [txnsB]);
   const delta = totalA - totalB;
-  const deltaPct = totalB !== 0 ? (delta / Math.abs(totalB)) * 100 : null;
+  const deltaPct = totalB > 0 && totalA >= 0 ? (delta / totalB) * 100 : null;
 
   const elapsedA = periodA ? elapsedDays(periodA) : 0;
   const elapsedB = periodB ? elapsedDays(periodB) : 0;
@@ -390,6 +410,9 @@ export default function Compare() {
     else setPickB(next);
   };
 
+  const uncovered = [periodA, periodB].filter((p) => p.from < dataStart && p.to >= dataStart);
+  const nothingCovered = [periodA, periodB].filter((p) => p.to < dataStart);
+
   // Compare elapsed days (not nominal length) so a partial current year vs a
   // full previous year still gets the per-day normalisation note
   const periodLengthsDiffer = Math.abs(elapsedA - elapsedB) > Math.max(elapsedA, elapsedB) * 0.1;
@@ -417,7 +440,8 @@ export default function Compare() {
             <button
               key={p.id}
               onClick={() => {
-                p.apply();
+                setPickA(p.a);
+                setPickB(p.b);
                 setActivePreset(p.id);
               }}
               className={cn(
@@ -451,6 +475,14 @@ export default function Compare() {
             months={availableMonths}
           />
         </div>
+        {(uncovered.length > 0 || nothingCovered.length > 0) && (
+          <p className="mt-3 text-xs text-terracotta">
+            Data starts {formatIsoDate(dataStart)}
+            {nothingCovered.length > 0
+              ? `, so ${nothingCovered.map((p) => p.label).join(" and ")} has no data at all.`
+              : `, so ${uncovered.map((p) => p.label).join(" and ")} ${uncovered.length > 1 ? "are" : "is"} only partly covered and ${uncovered.length > 1 ? "their totals are" : "its total is"} understated.`}
+          </p>
+        )}
       </motion.div>
 
       {/* KPI cards */}
@@ -477,7 +509,7 @@ export default function Compare() {
             {signedCurrency(delta)}
           </div>
           <div className="mt-2 text-xs text-muted-foreground">
-            {deltaPct !== null ? `${deltaPct > 0 ? "+" : ""}${deltaPct.toFixed(1)}% vs baseline` : "no baseline spend"}
+            {deltaPct !== null ? `${deltaPct > 0 ? "+" : ""}${deltaPct.toFixed(1)}% vs baseline` : totalB <= 0 ? "no baseline spend" : ""}
             {periodLengthsDiffer && (
               <span className={cn("block mt-0.5 font-medium", deltaColor(perDayA - perDayB))}>
                 {signedCurrency(perDayA - perDayB)}/day (periods differ in length)
@@ -526,7 +558,7 @@ export default function Compare() {
                     tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                    tickFormatter={formatAxisDollars}
                   />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend
@@ -572,7 +604,7 @@ export default function Compare() {
                     tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                    tickFormatter={formatAxisDollars}
                   />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend
@@ -616,7 +648,7 @@ export default function Compare() {
                 {groupRows.map((row) => {
                   const isOpen = expanded.has(row.id);
                   const children = isOpen ? childRowsOf(row.id) : [];
-                  const pct = row.b !== 0 ? (row.delta / Math.abs(row.b)) * 100 : null;
+                  const pct = row.b > 0 && row.a >= 0 ? (row.delta / row.b) * 100 : null;
                   return (
                     <GroupRows
                       key={row.id}
@@ -676,69 +708,44 @@ export default function Compare() {
         )}
       </motion.div>
 
-      {/* Day detail modal */}
-      <AnimatePresence>
-        {selectedDay && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
-            onClick={() => setSelectedDay(null)}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              transition={{ duration: 0.2 }}
-              className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-lg max-h-[70vh] overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-start justify-between p-5 border-b border-border">
-                <div>
-                  <h3 className="text-sm font-semibold text-foreground">{formatDay(selectedDay)}</h3>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {dayTxns.length} transaction{dayTxns.length === 1 ? "" : "s"} · Total: {formatCurrencyExact(dayTotal)}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setSelectedDay(null)}
-                  className="p-1.5 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="overflow-y-auto max-h-[calc(70vh-80px)]">
-                <table className="w-full text-sm">
-                  <tbody>
-                    {dayTxns.map((t) => (
-                      <tr key={t.id} className="border-b border-border/50 hover:bg-accent/50 transition-colors">
-                        <td className="px-5 py-2.5 text-xs text-foreground max-w-[220px] truncate" title={t.description}>
-                          {t.description}
-                        </td>
-                        <td className="px-5 py-2.5 text-xs hidden sm:table-cell">
-                          <button
-                            onClick={() => {
-                              setSelectedDay(null);
-                              handleCategoryNav(t.categoryId);
-                            }}
-                            className="text-primary hover:text-primary/80 hover:underline transition-colors"
-                          >
-                            {t.category}
-                          </button>
-                        </td>
-                        <td className={cn("px-5 py-2.5 text-xs font-medium text-right tabular-nums whitespace-nowrap", t.amount < 0 ? "text-eucalyptus" : "text-foreground")}>
-                          {formatCurrencyExact(t.amount)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Day detail */}
+      <Dialog open={!!selectedDay} onOpenChange={(open) => !open && setSelectedDay(null)}>
+        <DialogContent className="sm:max-w-lg max-h-[70vh] p-0 gap-0 overflow-hidden flex flex-col">
+          <DialogHeader className="p-5 pr-12 border-b border-border text-left">
+            <DialogTitle className="text-sm font-semibold">{selectedDay ? formatDay(selectedDay) : ""}</DialogTitle>
+            <DialogDescription className="text-xs">
+              {dayTxns.length} transaction{dayTxns.length === 1 ? "" : "s"} · Total: {formatCurrencyExact(dayTotal)}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="overflow-y-auto">
+            <table className="w-full text-sm">
+              <tbody>
+                {dayTxns.map((t) => (
+                  <tr key={t.id} className="border-b border-border/50 hover:bg-accent/50 transition-colors">
+                    <td className="px-5 py-2.5 text-xs text-foreground max-w-[220px] truncate" title={t.description}>
+                      {t.description}
+                    </td>
+                    <td className="px-5 py-2.5 text-xs hidden sm:table-cell">
+                      <button
+                        onClick={() => {
+                          setSelectedDay(null);
+                          handleCategoryNav(t.categoryId);
+                        }}
+                        className="text-primary hover:text-primary/80 hover:underline transition-colors"
+                      >
+                        {t.category}
+                      </button>
+                    </td>
+                    <td className={cn("px-5 py-2.5 text-xs font-medium text-right tabular-nums whitespace-nowrap", t.amount < 0 ? "text-eucalyptus" : "text-foreground")}>
+                      {formatCurrencyExact(t.amount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -825,7 +832,7 @@ function GroupRows({
               {signedCurrency(child.delta)}
             </td>
             <td className={cn("px-5 py-2 text-xs text-right tabular-nums hidden sm:table-cell", deltaColor(child.delta))}>
-              {child.b !== 0 ? `${child.delta > 0 ? "+" : ""}${((child.delta / Math.abs(child.b)) * 100).toFixed(0)}%` : child.a !== 0 ? "new" : "—"}
+              {child.b > 0 && child.a >= 0 ? `${child.delta > 0 ? "+" : ""}${((child.delta / child.b) * 100).toFixed(0)}%` : child.b === 0 && child.a > 0 ? "new" : "—"}
             </td>
           </tr>
         ))}

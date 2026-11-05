@@ -2,7 +2,8 @@
   DESIGN: Scandinavian Analytical — Monthly Breakdown
   - Hero banner with monthly image
   - Month selector, stacked bar chart, category table, daily chart
-  - Comparison to monthly average
+  - Comparison to monthly average. Opens on the last finished month; the
+    current month is "so far" and is compared over the same elapsed days
   - Reads ?month= from URL search params for cross-page navigation
   - Category rows link to /categories?category=...
 */
@@ -13,13 +14,12 @@ import StatCard from "@/components/StatCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
 import HeroBackdrop from "@/components/HeroBackdrop";
-import { formatCurrency, formatCurrencyExact, formatPercent, formatMonthYear } from "@/lib/utils";
+import { formatCurrency, formatCurrencyExact, formatPercent, formatMonthYear, formatAxisDollars } from "@/lib/utils";
 import { CHART_HEX_COLORS } from "@/lib/types";
 import { Calendar, TrendingUp, TrendingDown, BarChart3 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Cell, Legend,
-  ComposedChart, Line,
 } from "recharts";
 import { motion } from "framer-motion";
 import { useLocation } from "wouter";
@@ -39,7 +39,10 @@ export default function Monthly() {
     }
   }, [location, monthlyData]);
 
-  const activeMonth = selectedMonth || monthlyData[monthlyData.length - 1]?.month || "";
+  // Open on the last finished month: a few days into a month, its total says little
+  const defaultMonth =
+    [...monthlyData].reverse().find((m) => !m.partial)?.month ?? monthlyData[monthlyData.length - 1]?.month ?? "";
+  const activeMonth = selectedMonth || defaultMonth;
 
   const activeMonthData = useMemo(
     () => monthlyData.find((m) => m.month === activeMonth),
@@ -55,10 +58,34 @@ export default function Monthly() {
     [analysisTransactions, activeMonth]
   );
 
+  // For the current month, compare like with like: the days elapsed so far
+  const partial = !!activeMonthData?.partial;
+  const daysInActiveMonth = useMemo(() => {
+    if (!activeMonth) return 0;
+    const [year, month] = activeMonth.split("-").map(Number);
+    return new Date(year, month, 0).getDate();
+  }, [activeMonth]);
+  const elapsedDays = partial ? new Date().getDate() : daysInActiveMonth;
+
+  // What a month usually comes to: the monthly average, or for the current
+  // month the average of what finished months had spent by the same day
+  // (bills cluster early in a month, so a pro-rated average would mislead)
+  const expectedSoFar = useMemo(() => {
+    if (!partial) return avgMonthlySpend;
+    const full = new Set(monthlyData.filter((m) => !m.partial && m.count > 0).map((m) => m.month));
+    if (full.size === 0) return 0;
+    let sum = 0;
+    for (const t of analysisTransactions) {
+      const key = `${t.date.getFullYear()}-${String(t.date.getMonth() + 1).padStart(2, "0")}`;
+      if (full.has(key) && t.date.getDate() <= elapsedDays) sum += t.amount;
+    }
+    return sum / full.size;
+  }, [partial, avgMonthlySpend, monthlyData, analysisTransactions, elapsedDays]);
+
   const vsAverage = useMemo(() => {
-    if (!activeMonthData) return 0;
-    return ((activeMonthData.total - avgMonthlySpend) / avgMonthlySpend) * 100;
-  }, [activeMonthData, avgMonthlySpend]);
+    if (!activeMonthData || expectedSoFar <= 0) return null;
+    return ((activeMonthData.total - expectedSoFar) / expectedSoFar) * 100;
+  }, [activeMonthData, expectedSoFar]);
 
   // Category breakdown for selected month (keys are node ids)
   const categoryBreakdown = useMemo(() => {
@@ -67,7 +94,7 @@ export default function Monthly() {
       .map(([id, total]) => ({
         id,
         name: nameOf(id),
-        total: Math.round(total),
+        total,
         count: monthTransactions.filter((t) => t.categoryId === id).length,
         pct: (total / activeMonthData.total) * 100,
       }))
@@ -86,7 +113,10 @@ export default function Monthly() {
       dailyMap.set(day, (dailyMap.get(day) || 0) + t.amount);
     }
 
-    return Array.from({ length: daysInMonth }, (_, i) => ({
+    // The current month stops at today rather than drawing empty future days
+    const today = new Date();
+    const isCurrent = today.getFullYear() === year && today.getMonth() + 1 === month;
+    return Array.from({ length: isCurrent ? today.getDate() : daysInMonth }, (_, i) => ({
       day: i + 1,
       total: Math.round(dailyMap.get(i + 1) || 0),
     }));
@@ -121,10 +151,22 @@ export default function Monthly() {
     return idx > 0 ? monthlyData[idx - 1] : null;
   }, [monthlyData, activeMonth]);
 
+  // Previous month's spend over the same days (all of it, unless this month is partial)
+  const prevComparable = useMemo(() => {
+    if (!prevMonthData) return null;
+    if (!partial) return prevMonthData.total;
+    return analysisTransactions
+      .filter((t) => {
+        const key = `${t.date.getFullYear()}-${String(t.date.getMonth() + 1).padStart(2, "0")}`;
+        return key === prevMonthData.month && t.date.getDate() <= elapsedDays;
+      })
+      .reduce((s, t) => s + t.amount, 0);
+  }, [prevMonthData, partial, analysisTransactions, elapsedDays]);
+
   const monthOverMonthChange = useMemo(() => {
-    if (!activeMonthData || !prevMonthData) return null;
-    return ((activeMonthData.total - prevMonthData.total) / prevMonthData.total) * 100;
-  }, [activeMonthData, prevMonthData]);
+    if (!activeMonthData || prevComparable === null || prevComparable <= 0) return null;
+    return ((activeMonthData.total - prevComparable) / prevComparable) * 100;
+  }, [activeMonthData, prevComparable]);
 
   const handleCategoryClick = (categoryId: string) => {
     navigate(`/categories?category=${encodeURIComponent(categoryId)}`);
@@ -181,6 +223,7 @@ export default function Monthly() {
                 }`}
               >
                 {m.label}
+                {m.partial && <span className="ml-1 opacity-70">(so far)</span>}
               </button>
             ))}
           </div>
@@ -195,27 +238,37 @@ export default function Monthly() {
         className="grid grid-cols-2 lg:grid-cols-4 gap-4"
       >
         <StatCard
-          label={formatMonthYear(activeMonth)}
+          label={partial ? `${formatMonthYear(activeMonth)} so far` : formatMonthYear(activeMonth)}
           value={formatCurrency(activeMonthData?.total || 0)}
-          subtitle={`${activeMonthData?.count || 0} transactions`}
+          subtitle={`${activeMonthData?.count || 0} transactions${partial ? ` · ${elapsedDays} of ${daysInActiveMonth} days` : ""}`}
           icon={<Calendar className="w-4 h-4" />}
         />
         <StatCard
           label="vs. Monthly Average"
-          value={`${vsAverage >= 0 ? "+" : ""}${formatPercent(vsAverage)}`}
-          subtitle={`Avg: ${formatCurrency(avgMonthlySpend)}`}
-          icon={vsAverage >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+          value={vsAverage !== null ? `${vsAverage >= 0 ? "+" : ""}${formatPercent(vsAverage)}` : "—"}
+          subtitle={
+            partial
+              ? `Avg by day ${elapsedDays} of a month: ${formatCurrency(expectedSoFar)}`
+              : `Avg: ${formatCurrency(avgMonthlySpend)}`
+          }
+          icon={vsAverage !== null && vsAverage < 0 ? <TrendingDown className="w-4 h-4" /> : <TrendingUp className="w-4 h-4" />}
         />
         <StatCard
           label="vs. Previous Month"
-          value={monthOverMonthChange !== null ? `${monthOverMonthChange >= 0 ? "+" : ""}${formatPercent(monthOverMonthChange)}` : "N/A"}
-          subtitle={prevMonthData ? `${prevMonthData.label}: ${formatCurrency(prevMonthData.total)}` : "No prior month"}
+          value={monthOverMonthChange !== null ? `${monthOverMonthChange >= 0 ? "+" : ""}${formatPercent(monthOverMonthChange)}` : "—"}
+          subtitle={
+            prevMonthData && prevComparable !== null
+              ? partial
+                ? `${prevMonthData.label}, days 1–${elapsedDays}: ${formatCurrency(prevComparable)}`
+                : `${prevMonthData.label}: ${formatCurrency(prevComparable)}`
+              : "No prior month"
+          }
           icon={<BarChart3 className="w-4 h-4" />}
         />
         <StatCard
           label="Daily Average"
-          value={formatCurrency((activeMonthData?.total || 0) / (dailySpending.length || 1))}
-          subtitle={`${dailySpending.filter((d) => d.total > 0).length} active days`}
+          value={formatCurrency((activeMonthData?.total || 0) / (elapsedDays || 1))}
+          subtitle={`${dailySpending.filter((d) => d.total > 0).length} days with spending${partial ? " so far" : ""}`}
         />
       </motion.div>
 
@@ -241,7 +294,7 @@ export default function Monthly() {
                     tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                    tickFormatter={formatAxisDollars}
                   />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend
@@ -264,10 +317,13 @@ export default function Monthly() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
         >
-          <ChartCard title={`Daily Spending — ${formatMonthYear(activeMonth)}`} subtitle="Day-by-day breakdown">
+          <ChartCard
+            title={`Daily Spending — ${formatMonthYear(activeMonth)}`}
+            subtitle={partial ? `Day-by-day breakdown, up to today` : "Day-by-day breakdown"}
+          >
             <div className="h-[320px]">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={dailySpending}>
+                <BarChart data={dailySpending}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
                   <XAxis
                     dataKey="day"
@@ -279,20 +335,11 @@ export default function Monthly() {
                     tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(v) => `$${v}`}
+                    tickFormatter={formatAxisDollars}
                   />
                   <Tooltip content={<CustomTooltip />} />
                   <Bar dataKey="total" name="Daily Spend" fill="#c17c5e" radius={[3, 3, 0, 0]} opacity={0.8} />
-                  <Line
-                    type="monotone"
-                    dataKey="total"
-                    name="Trend"
-                    stroke="#4a7c8a"
-                    strokeWidth={1.5}
-                    dot={false}
-                    opacity={0.5}
-                  />
-                </ComposedChart>
+                </BarChart>
               </ResponsiveContainer>
             </div>
           </ChartCard>
