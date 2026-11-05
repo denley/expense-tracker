@@ -13,7 +13,7 @@ import ChartCard, { ColorLabel } from "@/components/ChartCard";
 import StatCard from "@/components/StatCard";
 import CustomTooltip from "@/components/CustomTooltip";
 import LoadingState from "@/components/LoadingState";
-import HeroBackdrop from "@/components/HeroBackdrop";
+import PageBanner from "@/components/PageBanner";
 import { formatCurrency, formatCurrencyExact, formatPercent, formatMonthYear, formatAxisDollars } from "@/lib/utils";
 import type { MonthlyData } from "@/lib/types";
 import { Calendar, TrendingUp, TrendingDown, BarChart3 } from "lucide-react";
@@ -185,24 +185,7 @@ export default function Monthly() {
 
   return (
     <div className="space-y-6">
-      {/* Hero Banner */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="relative rounded-2xl overflow-hidden h-[180px] lg:h-[200px]"
-      >
-        <HeroBackdrop />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#2d3436]/80 via-[#2d3436]/50 to-transparent" />
-        <div className="relative z-10 h-full flex flex-col justify-center px-6 lg:px-10">
-          <h2 className="text-2xl lg:text-3xl font-bold text-white tracking-tight">
-            Monthly Breakdown
-          </h2>
-          <p className="text-white/70 text-sm mt-2">
-            Drill into each month's spending composition
-          </p>
-        </div>
-      </motion.div>
+      <PageBanner title="Monthly Breakdown" subtitle="Each month's spending, by group and by category" />
 
       {/* Month Selector */}
       <motion.div
