@@ -126,6 +126,8 @@ export default function Transactions() {
     if (params.get("category")) setCategory(params.get("category")!);
     if (params.get("q")) setSearch(params.get("q")!);
     if (params.get("uncategorized")) setUncatOnly(true);
+    if (params.get("from")) setDateFrom(params.get("from")!);
+    if (params.get("to")) setDateTo(params.get("to")!);
     if (params.get("duplicates")) setDupOnly(true);
   }, [location]);
 

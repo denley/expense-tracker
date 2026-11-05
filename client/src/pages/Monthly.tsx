@@ -171,8 +171,9 @@ export default function Monthly() {
     return ((activeMonthData.total - prevComparable) / prevComparable) * 100;
   }, [activeMonthData, prevComparable]);
 
+  // The category for this month (Categories keeps the period)
   const handleCategoryClick = (categoryId: string) => {
-    navigate(`/categories?category=${encodeURIComponent(categoryId)}`);
+    navigate(`/categories?category=${encodeURIComponent(categoryId)}&month=${activeMonth}`);
   };
 
   const handleCompositionClick = (data: any) => {

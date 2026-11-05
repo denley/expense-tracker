@@ -33,7 +33,7 @@ Every transaction has exactly one category. Nothing double counts.
 ## Features
 
 ### Track & edit
-- **Transactions**: filter by search / category / account / date range, sort, multi-select, bulk categorise and delete, inline editing, manual entry, split one transaction into several categories. The category picker lists your most-used categories of the last 90 days first
+- **Transactions**: filter by search / category / account / date range (with a breakdown of where the filtered money went), sort, multi-select, bulk categorise and delete, inline editing, manual entry, split one transaction into several categories. The category picker lists your most-used categories of the last 90 days first
 - **CSV import**: drop any bank export; columns, date format (DMY/MDY/ISO) and sign conventions are detected. Mappings save as bank profiles that apply automatically to matching files. Duplicates (same date + amount + description) are skipped, foreign-currency files convert at a per-import rate, and a whole import can be filed into one category (e.g. a travel card into a trip)
 - **Categories**: drag-and-drop tree management, rename / merge / move / archive, live counts
 - **Rules**: "description contains X → category", applied on import or on demand, with suggestions mined from the uncategorised pile and from history, conflict and overlap inspection
@@ -41,7 +41,7 @@ Every transaction has exactly one category. Nothing double counts.
 ### Analyse
 - **Dashboard**: KPIs, monthly trend, category doughnut, top categories, cumulative spend
 - **Consistent colours**: a category has one colour everywhere (its own, else its top-level group's), and every chart can switch to a table of the same numbers
-- **Categories / Monthly / Trends**: drill-down pages with cross-navigation
+- **Categories / Monthly / Trends**: drill-down pages with cross-navigation. Categories can focus on one month (click a month, step with ‹ ›) or the period you came from (a month on Monthly, a period on Compare), and lists the whole tree in a sidebar on wide screens
 - **Compare**: any two periods side by side, year-over-year presets, delta table, calendar heatmaps
 - **Time scope**: all time, a year, or a custom range
 

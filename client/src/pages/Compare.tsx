@@ -389,9 +389,14 @@ export default function Compare() {
   );
   const dayTotal = useMemo(() => dayTxns.reduce((s, t) => s + t.amount, 0), [dayTxns]);
 
+  /** A category for a given range (Categories keeps it as its period); period A by default */
   const handleCategoryNav = useCallback(
-    (categoryId: string) => navigate(`/categories?category=${encodeURIComponent(categoryId)}`),
-    [navigate]
+    (categoryId: string, range?: { from: string; to: string }) => {
+      const r = range ?? periodA;
+      const q = new URLSearchParams({ category: categoryId, ...(r ? { from: r.from, to: r.to } : {}) });
+      navigate(`/categories?${q.toString()}`);
+    },
+    [navigate, periodA]
   );
 
   if (loading) return <LoadingState />;
@@ -676,7 +681,7 @@ export default function Compare() {
                       childRows={children}
                       color={colorOf(row.id)}
                       onToggle={() => toggleExpanded(row.id)}
-                      onNavigate={handleCategoryNav}
+                      onNavigate={(id) => handleCategoryNav(id)}
                     />
                   );
                 })}
@@ -747,7 +752,8 @@ export default function Compare() {
                       <button
                         onClick={() => {
                           setSelectedDay(null);
-                          handleCategoryNav(t.categoryId);
+                          // That category for the day's month
+                          handleCategoryNav(t.categoryId, monthPeriod(t.dateStr.slice(0, 7)));
                         }}
                         className="text-primary hover:text-primary/80 hover:underline transition-colors"
                       >
