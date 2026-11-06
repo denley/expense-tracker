@@ -443,7 +443,7 @@ export default function Categories() {
                     value={periodValue}
                     onChange={(e) => setPeriod(periodFromValue(e.target.value) ?? null)}
                     className={cn(
-                      "bg-transparent py-1.5 font-semibold focus:outline-none cursor-pointer",
+                      "bg-background py-1.5 font-semibold focus:outline-none cursor-pointer",
                       stepKey ? "px-1" : "px-2.5"
                     )}
                     aria-label="Period"

@@ -63,6 +63,8 @@
 }
 
 :root {
+  /* Native controls (select lists, date pickers, scrollbars) follow the theme */
+  color-scheme: light;
   --radius: 0.75rem;
   --background: oklch(0.97 0.005 80);
   --foreground: oklch(0.25 0.015 250);
@@ -101,6 +103,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.16 0.01 250);
   --foreground: oklch(0.90 0.008 80);
   --card: oklch(0.20 0.012 250);
