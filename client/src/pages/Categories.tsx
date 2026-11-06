@@ -69,7 +69,7 @@ interface Rollup { total: number; count: number; direct: number; directCount: nu
 export default function Categories() {
   const {
     transactions, allTransactions, loading, tree, colorOf, nameOf, categorizeTransactions,
-    hideOneOffs, analysisTransactions, scopeLabel,
+    hideOneOffs, analysisTransactions, scopeLabel, availableYears,
   } = useExpenses();
   const [searchTerm, setSearchTerm] = useState("");
   const [sortField, setSortField] = useState<"date" | "amount">("date");
@@ -102,6 +102,27 @@ export default function Categories() {
   );
   const setSelection = (id: string) => go(id, period);
   const setPeriod = (p: Period | null) => go(selection, p);
+
+  // Period picker: years and months with data (all time, newest first)
+  const availableMonths = useMemo(
+    () => Array.from(new Set(allTransactions.map((t) => t.dateStr.slice(0, 7)))).sort().reverse(),
+    [allTransactions]
+  );
+  const periodYear =
+    period && period.from.slice(5) === "01-01" && period.to === `${period.from.slice(0, 4)}-12-31` ? period.from.slice(0, 4) : null;
+  const periodValue = !period ? "" : periodMonth ? `m:${periodMonth}` : periodYear ? `y:${periodYear}` : "custom";
+  const periodFromValue = (v: string): Period | null | undefined => {
+    if (v === "") return null;
+    if (v.startsWith("m:")) return monthPeriod(v.slice(2));
+    if (v.startsWith("y:")) return yearPeriod(v.slice(2));
+    return period; // "custom": unchanged
+  };
+  /** ‹ › step by month or by year, whichever the period is */
+  const stepKey = periodMonth ?? periodYear;
+  const step = (delta: number) => {
+    if (periodMonth) setPeriod(monthPeriod(shiftMonthKey(periodMonth, delta)));
+    else if (periodYear) setPeriod(yearPeriod(String(Number(periodYear) + delta)));
+  };
 
   const node = selection ? tree.byId.get(selection) : undefined;
 
@@ -405,31 +426,48 @@ export default function Categories() {
                   allDetail={`${formatCurrency(grandTotal)} · ${baseTransactions.length} transactions`}
                 />
               </div>
-              {period && (
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <div className="inline-flex items-center rounded-lg border border-border bg-background text-xs font-semibold">
-                    {periodMonth && (
-                      <button
-                        onClick={() => setPeriod(monthPeriod(shiftMonthKey(periodMonth, -1)))}
-                        className="px-2 py-1.5 text-muted-foreground hover:text-foreground"
-                        aria-label="Previous month"
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                      </button>
+              {/* The page's own period: always here, so any month or year is one pick away */}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <span className="text-xs text-muted-foreground">Period</span>
+                <div className="inline-flex items-center rounded-lg border border-border bg-background text-xs font-semibold">
+                  {stepKey && (
+                    <button
+                      onClick={() => step(-1)}
+                      className="px-2 py-1.5 text-muted-foreground hover:text-foreground"
+                      aria-label={periodYear ? "Previous year" : "Previous month"}
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <select
+                    value={periodValue}
+                    onChange={(e) => setPeriod(periodFromValue(e.target.value) ?? null)}
+                    className={cn(
+                      "bg-transparent py-1.5 font-semibold focus:outline-none cursor-pointer",
+                      stepKey ? "px-1" : "px-2.5"
                     )}
-                    <span className={cn("py-1.5", periodMonth ? "px-1" : "px-3")}>
-                      {periodMonth ? formatMonthYear(periodMonth) : period.label}
-                    </span>
-                    {periodMonth && (
-                      <button
-                        onClick={() => setPeriod(monthPeriod(shiftMonthKey(periodMonth, 1)))}
-                        className="px-2 py-1.5 text-muted-foreground hover:text-foreground"
-                        aria-label="Next month"
-                      >
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
+                    aria-label="Period"
+                  >
+                    <option value="">{scopeLabel} (sidebar scope)</option>
+                    {period && !periodMonth && !periodYear && <option value="custom">{period.label}</option>}
+                    <optgroup label="Years">
+                      {[...availableYears].reverse().map((y) => <option key={y} value={`y:${y}`}>{y}</option>)}
+                    </optgroup>
+                    <optgroup label="Months">
+                      {availableMonths.map((m) => <option key={m} value={`m:${m}`}>{formatMonthYear(m)}</option>)}
+                    </optgroup>
+                  </select>
+                  {stepKey && (
+                    <button
+                      onClick={() => step(1)}
+                      className="px-2 py-1.5 text-muted-foreground hover:text-foreground"
+                      aria-label={periodYear ? "Next year" : "Next month"}
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                {period && (
                   <button
                     onClick={() => setPeriod(null)}
                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -437,8 +475,8 @@ export default function Categories() {
                     <X className="w-3 h-3" />
                     {scopeLabel}
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </motion.div>
 
