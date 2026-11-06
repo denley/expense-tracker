@@ -178,6 +178,11 @@ interface ExpenseContextType {
   /** Put deleted rows back unchanged (same ids; replay-safe) */
   restoreTransactions: (rows: StoredTransaction[]) => void;
   /**
+   * Confirm rows are real although they look like duplicates (or take that
+   * back). Returns an undo that only touches rows still in the state it left.
+   */
+  setNotDuplicate: (ids: string[], value: boolean) => () => void;
+  /**
    * Replace one transaction with 2+ parts that must sum to its amount.
    * Parts keep the parent's date, description and account; each part gets
    * its own category, amount and notes. Single write — aggregates stay exact.
@@ -818,6 +823,20 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     [mutateTxns]
   );
 
+  const setNotDuplicate = useCallback(
+    (ids: string[], value: boolean) => {
+      const apply = (target: Set<string>, to: boolean, from: boolean) =>
+        mutateTxns((prev) =>
+          prev.map((t) => (target.has(t.id) && !!t.notDuplicate === from ? { ...t, notDuplicate: to || undefined } : t))
+        );
+      // Only rows that actually change; undo flips back just those
+      const changed = new Set(stored.filter((t) => ids.includes(t.id) && !!t.notDuplicate !== value).map((t) => t.id));
+      apply(changed, value, !value);
+      return () => apply(changed, !value, value);
+    },
+    [mutateTxns, stored]
+  );
+
   const categorizeTransactions = useCallback(
     (ids: string[], categoryId: string) => {
       const idSet = new Set(ids);
@@ -1104,6 +1123,7 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
     categorizeTransactions,
     deleteTransactions,
     restoreTransactions,
+    setNotDuplicate,
     splitTransaction,
     revertCategories,
     addNode,

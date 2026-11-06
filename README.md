@@ -10,7 +10,7 @@ It's designed to run on a home server behind [Tailscale](https://tailscale.com/)
 
 | File | Contents |
 |---|---|
-| `transactions.csv` | `ID,Date,Description,Amount,CategoryId,Account,Notes,OriginalAmount,FxRate` |
+| `transactions.csv` | `ID,Date,Description,Amount,CategoryId,Account,Notes,OriginalAmount,FxRate`, plus `NotDuplicate` once a possible duplicate has been confirmed as real |
 | `categories.csv` | `Id,ParentId,Name,Path,OneOff,Archived,Color,Budget,Notes,CreatedAt` — the category tree |
 | `rules.csv` | `Pattern,IsRegex,CategoryId,Enabled,CreatedAt` — auto-categorisation, first match wins |
 | `import-profiles.json` | saved bank CSV column mappings |

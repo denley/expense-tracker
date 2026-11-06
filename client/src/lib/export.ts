@@ -20,23 +20,31 @@ export interface BackupFile {
 }
 
 const TXN_FIELDS = ["ID", "Date", "Description", "Amount", "CategoryId", "Account", "Notes", "OriginalAmount", "FxRate"];
+/** Optional trailing column, written only while some row uses it (keeps the usual file shape otherwise) */
+const NOT_DUPLICATE_FIELD = "NotDuplicate";
 
 export function transactionsToCsv(transactions: StoredTransaction[]): string {
-  const rows = transactions.map((t) => [
-    t.id,
-    t.date,
-    t.description,
-    t.amount.toFixed(2),
-    t.categoryId,
-    t.account,
-    t.notes,
-    t.originalAmount !== undefined ? t.originalAmount.toFixed(2) : "",
-    t.fxRate !== undefined ? String(t.fxRate) : "",
-  ]);
+  const withNotDuplicate = transactions.some((t) => t.notDuplicate);
+  const rows = transactions.map((t) => {
+    const row = [
+      t.id,
+      t.date,
+      t.description,
+      t.amount.toFixed(2),
+      t.categoryId,
+      t.account,
+      t.notes,
+      t.originalAmount !== undefined ? t.originalAmount.toFixed(2) : "",
+      t.fxRate !== undefined ? String(t.fxRate) : "",
+    ];
+    if (withNotDuplicate) row.push(t.notDuplicate ? "true" : "");
+    return row;
+  });
   // Explicit fields so an empty list still produces the header row — a file
   // without it reads back as unparseable, not as "zero transactions".
   // Unix newlines: agents and scripts append with "\n"; mixed endings break parsing
-  return Papa.unparse({ fields: TXN_FIELDS, data: rows }, { newline: "\n" });
+  const fields = withNotDuplicate ? [...TXN_FIELDS, NOT_DUPLICATE_FIELD] : TXN_FIELDS;
+  return Papa.unparse({ fields, data: rows }, { newline: "\n" });
 }
 
 /** Spreadsheet-friendly export: CategoryId plus resolved Group and Category Path columns */
@@ -86,6 +94,7 @@ export function csvToTransactions(text: string): StoredTransaction[] | null {
         notes: r.Notes ?? "",
         ...(isNaN(originalAmount) ? {} : { originalAmount }),
         ...(isNaN(fxRate) ? {} : { fxRate }),
+        ...(r.NotDuplicate === "true" ? { notDuplicate: true } : {}),
       };
     });
 }

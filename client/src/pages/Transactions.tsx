@@ -35,8 +35,10 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import type { AccountCoverage } from "@/contexts/ExpenseContext";
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/useMobile";
 import { motion, AnimatePresence } from "framer-motion";
@@ -63,7 +65,7 @@ const SORT_OPTIONS: Array<{ value: `${SortField}-${"asc" | "desc"}`; label: stri
 export default function Transactions() {
   const {
     transactions, allTransactions, loading, accounts, accountCoverage, groupColors, tree, nameOf,
-    categorizeTransactions, deleteTransactions, restoreTransactions, runRules, rules,
+    categorizeTransactions, deleteTransactions, restoreTransactions, setNotDuplicate, runRules, rules,
   } = useExpenses();
   const [location] = useLocation();
   const isMobile = useIsMobile();
@@ -131,20 +133,39 @@ export default function Transactions() {
     if (params.get("duplicates")) setDupOnly(true);
   }, [location]);
 
-  // Transactions sharing a date + amount + description with at least one other
-  const duplicateIds = useMemo(() => {
-    const byKey = new Map<string, string[]>();
+  // Transactions sharing a date + amount + description with at least one other,
+  // unless every row of the group has been confirmed as real ("not a duplicate").
+  // Maps each flagged row to its whole group.
+  const duplicateGroups = useMemo(() => {
+    const byKey = new Map<string, Transaction[]>();
     for (const t of allTransactions) {
       const key = dedupKey({ date: t.dateStr, amount: t.amount, description: t.description, originalAmount: t.originalAmount });
       if (!byKey.has(key)) byKey.set(key, []);
-      byKey.get(key)!.push(t.id);
+      byKey.get(key)!.push(t);
     }
-    const ids = new Set<string>();
+    const groups = new Map<string, string[]>();
     for (const group of byKey.values()) {
-      if (group.length > 1) group.forEach((id) => ids.add(id));
+      if (group.length > 1 && group.some((t) => !t.notDuplicate)) {
+        const ids = group.map((t) => t.id);
+        for (const id of ids) groups.set(id, ids);
+      }
     }
-    return ids;
+    return groups;
   }, [allTransactions]);
+  const duplicateIds = useMemo(() => new Set(duplicateGroups.keys()), [duplicateGroups]);
+
+  const markNotDuplicate = (t: Transaction) => {
+    const ids = duplicateGroups.get(t.id) ?? [t.id];
+    toastWithUndo(
+      `Marked ${ids.length} matching transactions as real — no longer flagged`,
+      setNotDuplicate(ids, true),
+      "Flagged as possible duplicates again"
+    );
+  };
+  const deleteOne = (t: Transaction) => {
+    const removed = deleteTransactions([t.id]);
+    toastWithUndo(`Deleted "${t.description}"`, () => restoreTransactions(removed), "Transaction restored");
+  };
 
   const filtered = useMemo(() => {
     let list = transactions;
@@ -370,13 +391,11 @@ export default function Transactions() {
       >
         <div className="flex-1 min-w-0 md:flex-initial">
           <h2 className="text-2xl font-bold tracking-tight text-foreground">Transactions</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {filtered.length} of {transactions.length} transactions
-            {hasFilters && <> · {formatCurrency(filteredTotal)} filtered total</>}
+          <p className="text-sm text-muted-foreground mt-0.5 flex flex-wrap gap-x-3 empty:hidden">
             {uncatCount > 0 && (
               <button
                 onClick={() => { clearFilters(); setUncatOnly(true); }}
-                className="ml-2 text-terracotta hover:underline font-medium"
+                className="text-terracotta hover:underline font-medium"
               >
                 {uncatCount} uncategorised →
               </button>
@@ -384,38 +403,42 @@ export default function Transactions() {
             {dupCount > 0 && (
               <button
                 onClick={() => { clearFilters(); setDupOnly(true); }}
-                className="ml-2 text-sandstone hover:underline font-medium"
+                className="text-sandstone hover:underline font-medium"
                 title="Transactions with the same date, amount and description as another"
               >
                 {dupCount} possible duplicates →
               </button>
             )}
           </p>
-          {accountCoverage.length > 0 && (
-            <p
-              className="text-xs text-muted-foreground mt-1"
-              title="Latest transaction per account across all years — export from your bank from here onwards"
-            >
-              Data until:{" "}
-              {accountCoverage.map((c, i) => (
-                <span key={c.account}>
-                  {i > 0 && " · "}
-                  <span className="font-medium text-foreground">{c.account}</span>{" "}
-                  {formatIsoDate(c.to)}
-                </span>
-              ))}
-            </p>
-          )}
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => fileInput.current?.click()}
-            className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border hover:bg-accent transition-colors"
-            title="Import a bank CSV — or just drop one anywhere on this page"
-          >
-            <UploadCloud className="w-3.5 h-3.5" />
-            Import CSV
-          </button>
+          {/* Import CSV, with "data until" per account one click away (it's what you check before exporting from the bank) */}
+          <div className="hidden md:flex items-stretch rounded-lg border border-border">
+            <button
+              onClick={() => fileInput.current?.click()}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-l-lg text-xs font-medium hover:bg-accent transition-colors"
+              title="Import a bank CSV — or just drop one anywhere on this page"
+            >
+              <UploadCloud className="w-3.5 h-3.5" />
+              Import CSV
+            </button>
+            {accountCoverage.length > 0 && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    className="px-1.5 rounded-r-lg border-l border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    aria-label="Data until, per account"
+                    title="Data until, per account"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-72 p-3">
+                  <AccountCoverageList coverage={accountCoverage} />
+                </PopoverContent>
+              </Popover>
+            )}
+          </div>
           <input
             ref={fileInput}
             type="file"
@@ -471,6 +494,14 @@ export default function Transactions() {
               <DropdownMenuItem onSelect={exportFiltered}>
                 <Download /> Export {hasFilters ? "filtered" : "all"}
               </DropdownMenuItem>
+              {accountCoverage.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <div className="px-2 py-1.5">
+                    <AccountCoverageList coverage={accountCoverage} />
+                  </div>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -609,14 +640,13 @@ export default function Transactions() {
         )}
       </motion.div>
 
-      {/* Where the filtered money went (by sub-category, or by top-level category) */}
-      {hasFilters && (
-        <FilterBreakdown
-          rows={filtered}
-          category={category}
-          onPick={(id) => { setCategory(id); setVisibleCount(PAGE_SIZE); }}
-        />
-      )}
+      {/* Always-present summary line: count, total, and where the money went */}
+      <FilterBreakdown
+        rows={filtered}
+        total={filteredTotal}
+        category={category}
+        onPick={(id) => { setCategory(id); setVisibleCount(PAGE_SIZE); }}
+      />
 
       {/* Suggested rules covering the uncategorised pile */}
       {ruleSuggestions.length > 0 && (
@@ -743,12 +773,23 @@ export default function Transactions() {
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="truncate font-medium">{t.description}</span>
                       {duplicateIds.has(t.id) && (
-                        <span
-                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sandstone/15 text-sandstone text-[9px] font-semibold uppercase tracking-wide shrink-0"
-                          title="Same date, amount and description as another transaction"
-                        >
-                          <Copy className="w-2.5 h-2.5" /> dup
-                        </span>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sandstone/15 text-sandstone hover:bg-sandstone/25 text-[9px] font-semibold uppercase tracking-wide shrink-0"
+                              title="Same date, amount and description as another transaction — click to resolve"
+                            >
+                              <Copy className="w-2.5 h-2.5" /> dup
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent align="start" className="w-72 p-3 space-y-2.5">
+                            <DuplicateResolver
+                              count={duplicateGroups.get(t.id)?.length ?? 2}
+                              onNotDuplicate={() => markNotDuplicate(t)}
+                              onDelete={() => deleteOne(t)}
+                            />
+                          </PopoverContent>
+                        </Popover>
                       )}
                     </div>
                     {t.notes && (
@@ -946,6 +987,17 @@ export default function Transactions() {
         onSplit={() => setSplitTxn(sheetTxn)}
         onEdit={() => { setEditTxn(sheetTxn); setDialogOpen(true); }}
         onSelect={() => sheetTxn && toggleOne(sheetTxn.id)}
+        duplicate={
+          sheetTxn && duplicateIds.has(sheetTxn.id)
+            ? (
+              <DuplicateResolver
+                count={duplicateGroups.get(sheetTxn.id)?.length ?? 2}
+                onNotDuplicate={() => { markNotDuplicate(sheetTxn); setSheetOpen(false); }}
+                onDelete={() => { deleteOne(sheetTxn); setSheetOpen(false); }}
+              />
+            )
+            : undefined
+        }
       />
 
       {/* Phone filters + sort */}
@@ -1125,5 +1177,47 @@ function SortHeader({ field, sortField, sortDir, onSort, className, alignRight }
         <Icon className={cn("w-3 h-3", !active && "opacity-40")} />
       </span>
     </th>
+  );
+}
+
+/** Latest transaction per account (all years): where to start the next bank export */
+function AccountCoverageList({ coverage }: { coverage: AccountCoverage[] }) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Data until</p>
+      {coverage.map((c) => (
+        <div key={c.account} className="flex items-baseline justify-between gap-3 text-xs">
+          <span className="font-medium text-foreground truncate">{c.account}</span>
+          <span className="text-muted-foreground tabular-nums whitespace-nowrap">{formatIsoDate(c.to)}</span>
+        </div>
+      ))}
+      <p className="text-[11px] text-muted-foreground pt-1">Export from your bank from these dates onwards.</p>
+    </div>
+  );
+}
+
+/** What to do about a possible duplicate: keep both (stop flagging the group) or delete this copy */
+function DuplicateResolver({ count, onNotDuplicate, onDelete }: { count: number; onNotDuplicate: () => void; onDelete: () => void }) {
+  return (
+    <>
+      <p className="text-xs text-foreground">
+        <span className="font-semibold">Possible duplicate.</span>{" "}
+        {count} transactions share this date, amount and description.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={onNotDuplicate}
+          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:opacity-90"
+        >
+          They're all real
+        </button>
+        <button
+          onClick={onDelete}
+          className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-border hover:bg-accent"
+        >
+          Delete this one
+        </button>
+      </div>
+    </>
   );
 }

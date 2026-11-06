@@ -22,10 +22,12 @@ interface Props {
   onSplit: () => void;
   onEdit: () => void;
   onSelect: () => void;
+  /** Shown when the row is a possible duplicate (keep it or delete it) */
+  duplicate?: React.ReactNode;
 }
 
 export default function TransactionSheet({
-  transaction: t, open, onOpenChange, matchingRule, onRule, onSplit, onEdit, onSelect,
+  transaction: t, open, onOpenChange, matchingRule, onRule, onSplit, onEdit, onSelect, duplicate,
 }: Props) {
   const { categorizeTransactions, nameOf } = useExpenses();
   if (!t) return null;
@@ -61,6 +63,9 @@ export default function TransactionSheet({
         </SheetHeader>
 
         <div className="px-4 pb-4 space-y-4">
+          {duplicate && (
+            <div className="rounded-xl border border-sandstone/40 bg-sandstone/10 p-3 space-y-2.5">{duplicate}</div>
+          )}
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-muted-foreground">Category</span>
             <CategoryPicker

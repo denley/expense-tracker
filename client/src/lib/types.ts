@@ -18,6 +18,8 @@ export interface Transaction {
   originalAmount?: number;
   /** Rate applied at import: amount = originalAmount × fxRate */
   fxRate?: number;
+  /** Confirmed as real although it matches another row's date, amount and description */
+  notDuplicate?: boolean;
 }
 
 /** Serialized form stored in transactions.csv / JSON backups — references the tree by id only */
@@ -31,6 +33,8 @@ export interface StoredTransaction {
   notes: string;
   originalAmount?: number;
   fxRate?: number;
+  /** Someone confirmed this row is real although it matches another one's date, amount and description */
+  notDuplicate?: boolean;
 }
 
 /**

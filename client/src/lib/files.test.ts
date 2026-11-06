@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { csvToRules, rulesToCsv, validateFile, emptyWorkspaceTexts, parseWorkspace, normalizeLoaded, WS_FILES } from "./files";
+import { csvToTransactions, transactionsToCsv } from "./export";
 
 describe("rules.csv ids", () => {
   const text =
@@ -61,5 +62,19 @@ describe("normalizeLoaded", () => {
     const norm = normalizeLoaded([], [{ id: "uncategorized", parentId: null, name: "To sort" }]);
     expect(norm.nodesChanged).toBe(false);
     expect(norm.nodes[0].name).toBe("To sort");
+  });
+});
+
+describe("transactions.csv NotDuplicate column", () => {
+  const row = { id: "t1", date: "2026-10-01", description: "COFFEE", amount: 4.5, categoryId: "uncategorized", account: "", notes: "" };
+
+  it("keeps the usual header while no row uses it", () => {
+    expect(transactionsToCsv([row]).split("\n")[0]).toBe("ID,Date,Description,Amount,CategoryId,Account,Notes,OriginalAmount,FxRate");
+  });
+
+  it("round-trips once a row is marked", () => {
+    const text = transactionsToCsv([{ ...row, notDuplicate: true }, { ...row, id: "t2" }]);
+    expect(text.split("\n")[0]).toMatch(/,NotDuplicate$/);
+    expect(csvToTransactions(text)).toEqual([{ ...row, notDuplicate: true }, { ...row, id: "t2" }]);
   });
 });

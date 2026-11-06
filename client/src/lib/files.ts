@@ -2,7 +2,7 @@
   The data files and their (de)serialization. Shared by the app and the
   server, so it must stay free of DOM and Node APIs.
 
-    transactions.csv       ID,Date,Description,Amount,CategoryId,Account,Notes,OriginalAmount,FxRate
+    transactions.csv       ID,Date,Description,Amount,CategoryId,Account,Notes,OriginalAmount,FxRate[,NotDuplicate]
     categories.csv         Id,ParentId,Name,Path,OneOff,Archived,Color,Budget,Notes,CreatedAt
     rules.csv              Pattern,IsRegex,CategoryId,Enabled,CreatedAt
     import-profiles.json   app-managed bank column mappings

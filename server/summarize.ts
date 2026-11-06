@@ -29,6 +29,7 @@ function txnFieldsChanged(a: StoredTransaction, b: StoredTransaction): string[] 
   if (a.amount !== b.amount) fields.push("amount");
   if (a.account !== b.account) fields.push("account");
   if (a.notes !== b.notes) fields.push("notes");
+  if (!!a.notDuplicate !== !!b.notDuplicate) fields.push(b.notDuplicate ? "marked not a duplicate" : "duplicate mark removed");
   return fields;
 }
 

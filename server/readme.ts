@@ -87,6 +87,10 @@ ID,Date,Description,Amount,CategoryId,Account,Notes,OriginalAmount,FxRate
 - \`OriginalAmount\`, \`FxRate\` — only for foreign-currency imports: the
   source-currency amount and the rate used (\`Amount ≈ OriginalAmount × FxRate\`).
   Duplicate detection matches on \`OriginalAmount\` when present.
+- \`NotDuplicate\` — optional trailing column, present only once someone has used
+  it: \`true\` on rows confirmed as real although another row has the same date,
+  amount and description (the app stops flagging a group once all its rows have
+  it). Keep the column if it's there.
 
 ### rules.csv — auto-categorisation rules
 \`\`\`
